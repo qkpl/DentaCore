@@ -31,6 +31,7 @@ export default function AppointmentsScreen({
   const [selectedAppointment, setSelectedAppointment] =
     useState<Appointment | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [feedbackMessage, setFeedbackMessage] = useState<string>("");
 
   const appointments = user ? getAppointmentsByPatient(user.id) : [];
 
@@ -94,10 +95,12 @@ export default function AppointmentsScreen({
           onPress: () => {
             const success = deleteAppointment(appointment.id);
             if (success) {
-              Alert.alert("Cancelled", "Appointment cancelled successfully");
+              setFeedbackMessage("Appointment cancelled successfully.");
               setRefreshTrigger((prev) => prev + 1);
+              setTimeout(() => setFeedbackMessage(""), 2400);
             } else {
-              Alert.alert("Error", "Failed to cancel appointment");
+              setFeedbackMessage("Failed to cancel appointment.");
+              setTimeout(() => setFeedbackMessage(""), 2400);
             }
           },
         },
@@ -107,6 +110,8 @@ export default function AppointmentsScreen({
 
   const handleRescheduleSuccess = () => {
     setRefreshTrigger((prev) => prev + 1);
+    setFeedbackMessage("Appointment rescheduled. Waiting for clinic confirmation.");
+    setTimeout(() => setFeedbackMessage(""), 2400);
   };
 
   return (
@@ -125,6 +130,12 @@ export default function AppointmentsScreen({
         </View>
         <View style={styles.placeholder} />
       </View>
+
+      {feedbackMessage ? (
+        <View style={styles.feedbackBanner}>
+          <Text style={styles.feedbackText}>{feedbackMessage}</Text>
+        </View>
+      ) : null}
 
       {/* Filter Tabs */}
       <ScrollView
@@ -465,5 +476,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#BBB",
     marginTop: 5,
+  },
+  feedbackBanner: {
+    backgroundColor: "#E0F2F1",
+    borderLeftWidth: 4,
+    borderLeftColor: "#00BFA6",
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: 20,
+    marginTop: 12,
+    borderRadius: 8,
+  },
+  feedbackText: {
+    color: "#00695C",
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

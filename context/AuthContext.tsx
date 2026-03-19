@@ -25,11 +25,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const [clinic, setClinic] = useState<Clinic | null>(null);
 
   const login = (email: string, password: string): boolean => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password.trim();
+
     // Find user by email and password
     const foundUser = mockUsers.find(
       (u) =>
-        u.email.toLowerCase() === email.toLowerCase() &&
-        u.password === password,
+        u.email.toLowerCase() === normalizedEmail &&
+        u.password === normalizedPassword,
     );
 
     if (foundUser) {

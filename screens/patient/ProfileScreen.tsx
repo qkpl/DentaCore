@@ -23,7 +23,10 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       {
         text: "Logout",
         style: "destructive",
-        onPress: logout,
+        onPress: () => {
+          logout();
+          navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
+        },
       },
     ]);
   };

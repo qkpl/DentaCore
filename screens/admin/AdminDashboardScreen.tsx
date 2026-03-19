@@ -29,6 +29,9 @@ export default function AdminDashboardScreen({
   const clinics = getAllClinics();
   const users = getAllUsers();
 
+  const forecastGrowthRate = 0.12; // 12% forecast growth
+  const predictedRevenue = Math.round(stats.totalRevenue * (1 + forecastGrowthRate));
+
   return (
     <ScrollView style={styles.container}>
       {/* Header */}
@@ -70,7 +73,7 @@ export default function AdminDashboardScreen({
         <View style={[styles.statCard, { backgroundColor: "#4CAF50" }]}>
           <Ionicons name="cash" size={32} color="#FFF" />
           <Text style={styles.statValue}>
-            ${(stats.totalRevenue / 1000).toFixed(1)}K
+            ₱{(stats.totalRevenue / 1000).toFixed(1)}K
           </Text>
           <Text style={styles.statLabel}>Total Revenue</Text>
         </View>
@@ -82,7 +85,7 @@ export default function AdminDashboardScreen({
         <View style={styles.trendCard}>
           <View style={styles.trendHeader}>
             <Text style={styles.trendValue}>
-              ${stats.totalRevenue.toLocaleString()}
+              ₱{stats.totalRevenue.toLocaleString()}
             </Text>
             <View style={styles.trendBadge}>
               <Ionicons name="trending-up" size={16} color="#4CAF50" />
@@ -90,34 +93,50 @@ export default function AdminDashboardScreen({
             </View>
           </View>
           <Text style={styles.trendSubtext}>This month vs last month</Text>
-
-          {/* Simple bar chart representation */}
-          <View style={styles.chartContainer}>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "60%" }]} />
-              <Text style={styles.barLabel}>Jan</Text>
-            </View>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "70%" }]} />
-              <Text style={styles.barLabel}>Feb</Text>
-            </View>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "80%" }]} />
-              <Text style={styles.barLabel}>Mar</Text>
-            </View>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "75%" }]} />
-              <Text style={styles.barLabel}>Apr</Text>
-            </View>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "90%" }]} />
-              <Text style={styles.barLabel}>May</Text>
-            </View>
-            <View style={styles.chartBar}>
-              <View style={[styles.bar, { height: "95%" }]} />
-              <Text style={styles.barLabel}>Jun</Text>
+          <View style={styles.chartBox}>
+            <Text style={styles.chartTitle}>Monthly revenue trend</Text>
+            <View style={styles.chartContainer}>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "60%" }]} />
+                <Text style={styles.barLabel}>Jan</Text>
+              </View>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "70%" }]} />
+                <Text style={styles.barLabel}>Feb</Text>
+              </View>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "80%" }]} />
+                <Text style={styles.barLabel}>Mar</Text>
+              </View>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "75%" }]} />
+                <Text style={styles.barLabel}>Apr</Text>
+              </View>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "90%" }]} />
+                <Text style={styles.barLabel}>May</Text>
+              </View>
+              <View style={styles.chartBar}>
+                <View style={[styles.bar, { height: "95%" }]} />
+                <Text style={styles.barLabel}>Jun</Text>
+              </View>
             </View>
           </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.predictionCardOuter}>
+          <View style={styles.predictionRow}>
+            <Text style={styles.predictionLabel}>Revenue Prediction</Text>
+            <Text style={styles.predictionValue}>+12% forecast</Text>
+          </View>
+          <Text style={styles.predictionRevenue}>
+            ₱{predictedRevenue.toLocaleString()} predicted next month
+          </Text>
+          <Text style={styles.predictionNote}>
+            Based on current trend and growth projections.
+          </Text>
         </View>
       </View>
 
@@ -184,7 +203,7 @@ export default function AdminDashboardScreen({
             <View style={styles.clinicInfo}>
               <Text style={styles.clinicName}>{clinic.name}</Text>
               <Text style={styles.clinicRevenue}>
-                ${clinic.revenue.toLocaleString()} revenue
+                ₱{clinic.revenue.toLocaleString()} revenue
               </Text>
             </View>
             <View style={styles.clinicStats}>
@@ -304,21 +323,108 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#7C4DFF",
   },
+  predictionCard: {
+    marginTop: 12,
+    backgroundColor: "#E8F5E9",
+    borderRadius: 12,
+    padding: 14,
+  },
+  predictionCardOuter: {
+    backgroundColor: "#FFF",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    padding: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  predictionRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  predictionLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+  },
+  predictionValue: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#388E3C",
+  },
+  predictionRevenue: {
+    marginTop: 10,
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#2E7D32",
+  },
+  predictionNote: {
+    fontSize: 12,
+    color: "#555",
+    marginTop: 6,
+  },
+  chartContainer: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "flex-end",
+    height: 130,
+    marginTop: 12,
+    paddingTop: 8,
+  },
+  predictionContainer: {
+    marginTop: 12,
+    gap: 10,
+  },
+  chartBox: {
+    marginTop: 8,
+    borderRadius: 14,
+    backgroundColor: "#FFF",
+    padding: 10,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+  },
+  chartTitle: {
+    fontSize: 13,
+    color: "#666",
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  chartBar: {
+    flex: 1,
+    alignItems: "center",
+    marginHorizontal: 2,
+  },
+  bar: {
+    width: "70%",
+    backgroundColor: "#7C4DFF",
+    borderRadius: 4,
+    minHeight: 20,
+  },
+  barLabel: {
+    fontSize: 11,
+    color: "#999",
+    marginTop: 5,
+  },
   trendCard: {
     backgroundColor: "#FFF",
     borderRadius: 16,
-    padding: 20,
+    padding: 16,
+    marginBottom: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
   trendHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 5,
+    marginBottom: 8,
   },
   trendValue: {
     fontSize: 28,

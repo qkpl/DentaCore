@@ -5,6 +5,7 @@ import { useAuth } from "../context/AuthContext";
 
 // Auth Screen
 import AuthScreen from "../screens/AuthScreen";
+import SplashScreen from "../screens/SplashScreen";
 
 // Role-based Navigators
 import AdminNavigator from "./AdminNavigator";
@@ -18,22 +19,15 @@ export default function AppNavigator() {
 
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {!isAuthenticated ? (
-          <Stack.Screen name="Auth" component={AuthScreen} />
-        ) : (
-          <>
-            {user?.role === "patient" && (
-              <Stack.Screen name="PatientApp" component={PatientNavigator} />
-            )}
-            {user?.role === "clinic" && (
-              <Stack.Screen name="ClinicApp" component={ClinicNavigator} />
-            )}
-            {user?.role === "admin" && (
-              <Stack.Screen name="AdminApp" component={AdminNavigator} />
-            )}
-          </>
-        )}
+      <Stack.Navigator
+        initialRouteName="Splash"
+        screenOptions={{ headerShown: false }}
+      >
+        <Stack.Screen name="Splash" component={SplashScreen} />
+        <Stack.Screen name="Auth" component={AuthScreen} />
+        <Stack.Screen name="PatientApp" component={PatientNavigator} />
+        <Stack.Screen name="ClinicApp" component={ClinicNavigator} />
+        <Stack.Screen name="AdminApp" component={AdminNavigator} />
       </Stack.Navigator>
     </NavigationContainer>
   );

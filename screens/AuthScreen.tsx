@@ -1,19 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 import React, { useState } from "react";
 import {
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 
 export default function AuthScreen() {
+  const navigation = useNavigation<any>();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -24,12 +26,15 @@ export default function AuthScreen() {
   const { login, signup } = useAuth();
 
   const handleAuth = () => {
-    if (!email || !password) {
+    const cleanedEmail = email.trim();
+    const cleanedPassword = password.trim();
+
+    if (!cleanedEmail || !cleanedPassword) {
       Alert.alert("Error", "Please fill in all fields");
       return;
     }
 
-    if (!email.includes("@")) {
+    if (!cleanedEmail.includes("@")) {
       Alert.alert("Error", "Please enter a valid email address");
       return;
     }
@@ -45,10 +50,10 @@ export default function AuthScreen() {
       }
 
       const result = signup(
-        email,
-        password,
+        cleanedEmail,
+        cleanedPassword,
         userType,
-        name || email.split("@")[0],
+        name || cleanedEmail.split("@")[0],
       );
 
       if (!result.success) {
@@ -56,22 +61,35 @@ export default function AuthScreen() {
       } else {
         Alert.alert(
           "Success",
-          "Account created successfully! Welcome to DentaCore.",
+          "Account created successfully! Please sign in now.",
         );
+        setIsSignUp(false);
+        navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
       }
     } else {
       // Sign In Mode
-      const success = login(email, password);
+      const success = login(cleanedEmail, cleanedPassword);
 
       if (!success) {
         Alert.alert("Error", "Invalid credentials. Please try again.");
+      } else {
+        const routeName =
+          userType === "patient"
+            ? "PatientApp"
+            : userType === "clinic"
+            ? "ClinicApp"
+            : "AdminApp";
+        navigation.reset({
+          index: 0,
+          routes: [{ name: routeName }],
+        });
       }
     }
   };
 
   const showCredentials = () => {
     const credentials = {
-      patient: "Email: sarah.duterte@email.com\nPassword: patient123",
+      patient: "Email: user@email.com\nPassword: user123",
       clinic: "Email: admin@smilecare.com\nPassword: clinic123",
       admin: "Email: admin@dentacore.com\nPassword: admin123",
     };
@@ -95,7 +113,7 @@ export default function AuthScreen() {
             <Text style={styles.logoEmoji}>🦷</Text>
           </View>
           <Text style={styles.title}>DentaCore</Text>
-          <Text style={styles.subtitle}>Your Dental Care Companion</Text>
+          <Text style={styles.subtitle}>DentaCore: Connecting Smiles to Care.</Text>
         </View>
 
         <View style={styles.formContainer}>

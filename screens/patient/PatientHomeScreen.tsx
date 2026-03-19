@@ -22,6 +22,7 @@ export default function PatientHomeScreen({
   navigation,
 }: PatientHomeScreenProps) {
   const { user } = useAuth();
+  const [showWelcomeSplash, setShowWelcomeSplash] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredClinics, setFilteredClinics] = useState<Clinic[]>([]);
   const [allClinics, setAllClinics] = useState<Clinic[]>([]);
@@ -100,20 +101,51 @@ export default function PatientHomeScreen({
   };
 
   return (
-    <ScrollView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.greeting}>Hello,</Text>
-          <Text style={styles.userName}>{user?.name || "Guest"}</Text>
-        </View>
-        <TouchableOpacity
-          style={styles.profileButton}
-          onPress={() => navigation.navigate("Profile")}
-        >
+    <View style={styles.pageContainer}>
+      <ScrollView style={styles.container}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.greeting}>Hello,</Text>
+            <Text style={styles.userName}>{user?.name || "Guest"}</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.profileButton}
+            onPress={() => navigation.navigate("Profile")}
+          >
           <Ionicons name="person-circle" size={40} color="#00BFA6" />
         </TouchableOpacity>
       </View>
+
+      {/* AI Welcome Card */}
+      <View style={styles.aiCard}>
+        <View style={styles.aiCardIcon}>
+          <Ionicons name="chatbubbles" size={20} color="#FFF" />
+        </View>
+        <View style={styles.aiCardText}>
+          <Text style={styles.aiCardTitle}>Hi {user?.name?.split(" ")[0] || "there"}!</Text>
+          <Text style={styles.aiCardSubtitle}>
+            Your dental assistant is ready. Ask about appointments, services, or care.
+          </Text>
+        </View>
+      </View>
+
+      {showWelcomeSplash && (
+        <View style={styles.splashOverlay}>
+          <View style={styles.splashCard}>
+            <Text style={styles.splashTitle}>Welcome to DentaCore AI</Text>
+            <Text style={styles.splashText}>
+              Get personalized dental guidance and appointment help using our AI assistant.
+            </Text>
+            <TouchableOpacity
+              style={styles.splashButton}
+              onPress={() => setShowWelcomeSplash(false)}
+            >
+              <Text style={styles.splashButtonText}>Okay</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       {/* Search Bar with Filters */}
       <View style={styles.searchWrapper}>
@@ -400,7 +432,14 @@ export default function PatientHomeScreen({
           </View>
         </View>
       </Modal>
-    </ScrollView>
+      </ScrollView>
+      <TouchableOpacity
+        style={styles.chatFab}
+        onPress={() => navigation.navigate("AIAssistant")}
+      >
+        <Ionicons name="chatbubble-ellipses" size={24} color="#FFF" />
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -415,7 +454,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 20,
     paddingTop: 60,
-    backgroundColor: "#FFF",
+    backgroundColor: "#E3F7F2",
   },
   greeting: {
     fontSize: 16,
@@ -454,13 +493,63 @@ const styles = StyleSheet.create({
   quickActions: {
     flexDirection: "row",
     flexWrap: "wrap",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     marginBottom: 20,
   },
-  actionCard: {
-    width: "22%",
+  pageContainer: {
+    flex: 1,
+  },
+  aiCard: {
+    marginHorizontal: 20,
+    backgroundColor: "#E3F7F2",
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: "row",
     alignItems: "center",
-    marginRight: "4%",
+    marginBottom: 12,
+  },
+  aiCardIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#00BFA6",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  aiCardText: {
+    flex: 1,
+  },
+  aiCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#064D44",
+  },
+  aiCardSubtitle: {
+    fontSize: 13,
+    color: "#333",
+    marginTop: 4,
+  },
+  chatFab: {
+    position: "absolute",
+    right: 20,
+    bottom: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#00BFA6",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  actionCard: {
+    width: "23%",
+    alignItems: "center",
     marginBottom: 15,
   },
   actionIcon: {
@@ -746,5 +835,50 @@ const styles = StyleSheet.create({
   },
   starIcon: {
     marginBottom: 2,
+  },
+  splashOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 100,
+  },
+  splashCard: {
+    width: "85%",
+    backgroundColor: "#FFF",
+    borderRadius: 18,
+    padding: 20,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  splashTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#333",
+    marginBottom: 10,
+  },
+  splashText: {
+    fontSize: 14,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 18,
+  },
+  splashButton: {
+    backgroundColor: "#00BFA6",
+    paddingHorizontal: 24,
+    paddingVertical: 10,
+    borderRadius: 22,
+  },
+  splashButtonText: {
+    color: "#FFF",
+    fontWeight: "700",
   },
 });

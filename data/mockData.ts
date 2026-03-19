@@ -80,11 +80,11 @@ export interface StaffMember {
 export const mockUsers: User[] = [
   {
     id: "patient1",
-    name: "Sarah Duterte",
-    email: "sarah.duterte@email.com",
+    name: "Demo User",
+    email: "user@email.com",
     phone: "+1 (555) 123-4567",
     role: "patient",
-    password: "patient123",
+    password: "user123",
     address: "123 Main Street, New York, NY 10001",
   },
   {
