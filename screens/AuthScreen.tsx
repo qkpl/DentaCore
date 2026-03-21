@@ -2,15 +2,15 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import React, { useState } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 
@@ -20,12 +20,13 @@ export default function AuthScreen() {
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [userType, setUserType] = useState<"patient" | "clinic" | "admin">(
     "patient",
   );
   const { login, signup } = useAuth();
 
-  const handleAuth = () => {
+  const handleAuth = async () => {
     const cleanedEmail = email.trim();
     const cleanedPassword = password.trim();
 
@@ -39,51 +40,56 @@ export default function AuthScreen() {
       return;
     }
 
-    if (isSignUp) {
-      // Sign Up Mode
-      if (userType === "admin") {
-        Alert.alert(
-          "Error",
-          "Admin accounts cannot be registered. Please use existing admin credentials to sign in.",
+    setIsSubmitting(true);
+
+    try {
+      if (isSignUp) {
+        // Sign Up Mode
+        if (userType === "admin") {
+          Alert.alert(
+            "Error",
+            "Admin accounts cannot be registered. Please use existing admin credentials to sign in.",
+          );
+          return;
+        }
+
+        const result = await signup(
+          cleanedEmail,
+          cleanedPassword,
+          userType,
+          name || cleanedEmail.split("@")[0],
         );
-        return;
-      }
 
-      const result = signup(
-        cleanedEmail,
-        cleanedPassword,
-        userType,
-        name || cleanedEmail.split("@")[0],
-      );
-
-      if (!result.success) {
-        Alert.alert("Error", result.message);
+        if (!result.success) {
+          Alert.alert("Error", result.message);
+        } else {
+          Alert.alert("Success", result.message);
+          setIsSignUp(false);
+          navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
+        }
       } else {
-        Alert.alert(
-          "Success",
-          "Account created successfully! Please sign in now.",
-        );
-        setIsSignUp(false);
-        navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
-      }
-    } else {
-      // Sign In Mode
-      const success = login(cleanedEmail, cleanedPassword);
+        // Sign In Mode
+        const result = await login(cleanedEmail, cleanedPassword);
 
-      if (!success) {
-        Alert.alert("Error", "Invalid credentials. Please try again.");
-      } else {
-        const routeName =
-          userType === "patient"
-            ? "PatientApp"
-            : userType === "clinic"
-            ? "ClinicApp"
-            : "AdminApp";
-        navigation.reset({
-          index: 0,
-          routes: [{ name: routeName }],
-        });
+        if (!result.success) {
+          Alert.alert("Error", result.message || "Invalid credentials. Please try again.");
+        } else {
+          const routeName =
+            userType === "patient"
+              ? "PatientApp"
+              : userType === "clinic"
+              ? "ClinicApp"
+              : "AdminApp";
+          navigation.reset({
+            index: 0,
+            routes: [{ name: routeName }],
+          });
+        }
       }
+    } catch (err: any) {
+      Alert.alert("Error", err?.message || "Unexpected error occurred.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -263,9 +269,13 @@ export default function AuthScreen() {
             </View>
           )}
 
-          <TouchableOpacity style={styles.button} onPress={handleAuth}>
+          <TouchableOpacity
+            style={[styles.button, isSubmitting && styles.buttonDisabled]}
+            onPress={handleAuth}
+            disabled={isSubmitting}
+          >
             <Text style={styles.buttonText}>
-              {isSignUp ? "Sign Up" : "Sign In"}
+              {isSubmitting ? "Please wait..." : isSignUp ? "Sign Up" : "Sign In"}
             </Text>
           </TouchableOpacity>
 
@@ -432,6 +442,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#1976D2",
     textAlign: "center",
+  },
+  buttonDisabled: {
+    backgroundColor: "#80CBC4",
   },
   button: {
     backgroundColor: "#00BFA6",
