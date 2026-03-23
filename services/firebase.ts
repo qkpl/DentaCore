@@ -1,7 +1,6 @@
-import { getAnalytics } from "firebase/analytics";
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { initializeFirestore } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCrBCEoC7KNG44Kkh9vlCDaroKhTaGPOa4",
@@ -15,8 +14,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
-const analytics = typeof window !== "undefined" ? getAnalytics(app) : null;
 
-export { analytics, app, auth, db };
+// Use long-polling to make Firestore work reliably in Expo Go / React Native
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+});
+
+export { app, auth, db };
 export default app;
