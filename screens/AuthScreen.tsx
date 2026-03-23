@@ -92,7 +92,7 @@ export default function AuthScreen() {
         }
       } else {
         // Sign In Mode
-        const result = await login(cleanedEmail, cleanedPassword);
+        const result = await login(cleanedEmail, cleanedPassword, userType);
 
         if (!result.success) {
           Alert.alert(

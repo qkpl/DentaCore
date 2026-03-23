@@ -35,7 +35,11 @@ interface AuthResponse {
 interface AuthContextType {
   user: User | null;
   clinic: Clinic | null;
-  login: (email: string, password: string) => Promise<AuthResponse>;
+  login: (
+    email: string,
+    password: string,
+    expectedRole?: User["role"],
+  ) => Promise<AuthResponse>;
   signup: (
     email: string,
     password: string,
@@ -238,9 +242,36 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const login = async (
     email: string,
     password: string,
+    expectedRole?: User["role"],
   ): Promise<AuthResponse> => {
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedPassword = password.trim();
+
+    const formatRoleLabel = (role: User["role"]) =>
+      role.charAt(0).toUpperCase() + role.slice(1);
+
+    const enforceRole = async (account: User): Promise<AuthResponse | null> => {
+      if (!expectedRole) {
+        return null;
+      }
+
+      if (account.role !== expectedRole) {
+        const response: AuthResponse = {
+          success: false,
+          message: `This account is registered as a ${formatRoleLabel(account.role)}. Switch to the ${formatRoleLabel(account.role)} login to continue.`,
+        };
+
+        try {
+          await signOut(auth);
+        } catch (error) {
+          // Ignore sign-out failure when enforcing role
+        }
+
+        return response;
+      }
+
+      return null;
+    };
 
     try {
       const credential = await signInWithEmailAndPassword(
@@ -254,11 +285,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         throw new Error("Firebase sign-in failed");
       }
 
-      // load from Firestore
       const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
 
       if (userDoc.exists()) {
         const userData = userDoc.data() as User;
+        const roleMismatch = await enforceRole(userData);
+        if (roleMismatch) {
+          return roleMismatch;
+        }
         setUser(userData);
         await syncClinicsFromFirestore();
         await syncAppointmentsFromFirestore();
@@ -266,7 +300,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         return { success: true, message: "Login successful" };
       }
 
-      // fallback local login
       const foundUser = mockUsers.find(
         (u) =>
           u.email.toLowerCase() === normalizedEmail &&
@@ -277,13 +310,18 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         return { success: false, message: "Invalid credentials" };
       }
 
+      const roleMismatch = await enforceRole(foundUser);
+      if (roleMismatch) {
+        return roleMismatch;
+      }
+
       setUser(foundUser);
+      await syncAppointmentsFromFirestore();
       await setClinicForUser(foundUser);
       return { success: true, message: "Login successful (local fallback)" };
     } catch (error: any) {
       const message = error?.message || "Unable to login";
 
-      // fallback local login attempt
       const foundUser = mockUsers.find(
         (u) =>
           u.email.toLowerCase() === normalizedEmail &&
@@ -291,8 +329,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       );
 
       if (foundUser) {
+        const roleMismatch = await enforceRole(foundUser);
+        if (roleMismatch) {
+          return roleMismatch;
+        }
         setUser(foundUser);
-        await syncAppointmentsFromFirestore();
         await syncAppointmentsFromFirestore();
         await setClinicForUser(foundUser);
         return { success: true, message: "Login successful (local fallback)" };

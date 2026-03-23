@@ -274,34 +274,31 @@ export default function ClinicAppointmentsScreen({
       </View>
 
       {/* Filter Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabsContainer}
-        contentContainerStyle={styles.tabsContent}
-      >
-        {statusTabs.map((tabItem) => {
-          const isActive = selectedFilter === tabItem.key;
-          return (
-            <TouchableOpacity
-              key={tabItem.key}
-              style={[styles.tab, isActive && styles.tabActive]}
-              onPress={() => setSelectedFilter(tabItem.key)}
-            >
-              <Text
-                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+      <View style={styles.tabsContainer}>
+        <View style={styles.tabsContent}>
+          {statusTabs.map((tabItem) => {
+            const isActive = selectedFilter === tabItem.key;
+            return (
+              <TouchableOpacity
+                key={tabItem.key}
+                style={[styles.tab, isActive && styles.tabActive]}
+                onPress={() => setSelectedFilter(tabItem.key)}
               >
-                {tabItem.label}
-              </Text>
-              <Text
-                style={[styles.tabCount, isActive && styles.tabCountActive]}
-              >
-                {tabItem.count}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+                <Text
+                  style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+                >
+                  {tabItem.label}
+                </Text>
+                <Text
+                  style={[styles.tabCount, isActive && styles.tabCountActive]}
+                >
+                  {tabItem.count}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
 
       {/* Appointments List */}
       <ScrollView style={styles.content}>
@@ -569,16 +566,16 @@ const styles = StyleSheet.create({
   tabsContent: {
     paddingHorizontal: 16,
     paddingVertical: 20,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    columnGap: 14,
+    flexDirection: "column",
+    rowGap: 8,
   },
   tab: {
-    width: 125,
-    height: 110,
-    paddingHorizontal: 14,
-    paddingVertical: 16,
-    borderRadius: 24,
+    width: "84%",
+    alignSelf: "center",
+    height: 55,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 14,
     backgroundColor: "#F5F5F5",
     justifyContent: "space-between",
     alignItems: "center",
@@ -592,7 +589,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#00BFA6",
   },
   tabLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
     color: "#555",
     textTransform: "uppercase",
@@ -602,7 +599,7 @@ const styles = StyleSheet.create({
     color: "#E3FFF9",
   },
   tabCount: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: "700",
     color: "#222",
   },
