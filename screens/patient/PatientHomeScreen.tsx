@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React, { useEffect, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     Modal,
     ScrollView,
@@ -21,12 +22,13 @@ interface PatientHomeScreenProps {
 export default function PatientHomeScreen({
   navigation,
 }: PatientHomeScreenProps) {
-  const { user } = useAuth();
+  const { user, refreshClinics } = useAuth();
   const [showWelcomeSplash, setShowWelcomeSplash] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [filteredClinics, setFilteredClinics] = useState<Clinic[]>([]);
   const [allClinics, setAllClinics] = useState<Clinic[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+  const [refreshingClinics, setRefreshingClinics] = useState(false);
 
   // Filter states
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -100,9 +102,25 @@ export default function PatientHomeScreen({
     navigation.navigate("ClinicDetails", { clinic });
   };
 
+  const handleRefreshClinics = async () => {
+    if (refreshingClinics) {
+      return;
+    }
+
+    setRefreshingClinics(true);
+    try {
+      await refreshClinics();
+      applyFilters();
+    } catch (error) {
+      Alert.alert("Refresh Failed", "Unable to refresh clinic list right now.");
+    } finally {
+      setRefreshingClinics(false);
+    }
+  };
+
   return (
     <View style={styles.pageContainer}>
-      <ScrollView style={styles.container}>
+      <ScrollView style={styles.container} scrollEnabled={!showWelcomeSplash}>
         {/* Header */}
         <View style={styles.header}>
           <View>
@@ -113,29 +131,343 @@ export default function PatientHomeScreen({
             style={styles.profileButton}
             onPress={() => navigation.navigate("Profile")}
           >
-          <Ionicons name="person-circle" size={40} color="#00BFA6" />
-        </TouchableOpacity>
-      </View>
-
-      {/* AI Welcome Card */}
-      <View style={styles.aiCard}>
-        <View style={styles.aiCardIcon}>
-          <Ionicons name="chatbubbles" size={20} color="#FFF" />
+            <Ionicons name="person-circle" size={40} color="#00BFA6" />
+          </TouchableOpacity>
         </View>
-        <View style={styles.aiCardText}>
-          <Text style={styles.aiCardTitle}>Hi {user?.name?.split(" ")[0] || "there"}!</Text>
-          <Text style={styles.aiCardSubtitle}>
-            Your dental assistant is ready. Ask about appointments, services, or care.
+
+        {/* AI Welcome Card */}
+        <View style={styles.aiCard}>
+          <View style={styles.aiCardIcon}>
+            <Ionicons name="chatbubbles" size={20} color="#FFF" />
+          </View>
+          <View style={styles.aiCardText}>
+            <Text style={styles.aiCardTitle}>
+              Hi {user?.name?.split(" ")[0] || "there"}!
+            </Text>
+            <Text style={styles.aiCardSubtitle}>
+              Your dental assistant is ready. Ask about appointments, services,
+              or care.
+            </Text>
+          </View>
+        </View>
+
+        {/* Search Bar with Filters */}
+        <View style={styles.searchWrapper}>
+          <View style={styles.searchContainer}>
+            <Ionicons
+              name="search"
+              size={20}
+              color="#999"
+              style={styles.searchIcon}
+            />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search clinics by name or location..."
+              placeholderTextColor="#999"
+              value={searchQuery}
+              onChangeText={handleSearch}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => handleSearch("")}>
+                <Ionicons name="close-circle" size={20} color="#999" />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setShowFilters(true)}
+          >
+            <Ionicons name="options" size={20} color="#00BFA6" />
+            {activeFiltersCount > 0 && (
+              <View style={styles.filterBadge}>
+                <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.quickActions}>
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => navigation.navigate("Appointments")}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: "#E3F2FD" }]}>
+              <Ionicons name="calendar" size={24} color="#1976D2" />
+            </View>
+            <Text style={styles.actionText}>Appointments</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => navigation.navigate("Records")}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: "#E8F5E9" }]}>
+              <Ionicons name="document-text" size={24} color="#388E3C" />
+            </View>
+            <Text style={styles.actionText}>Records</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() => navigation.navigate("AIAssistant")}
+          >
+            <View style={[styles.actionIcon, { backgroundColor: "#FFF3E0" }]}>
+              <Ionicons name="chatbubbles" size={24} color="#F57C00" />
+            </View>
+            <Text style={styles.actionText}>AI Assistant</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionCard}
+            onPress={() =>
+              Alert.alert("Reminders", "You have no upcoming reminders")
+            }
+          >
+            <View style={[styles.actionIcon, { backgroundColor: "#FCE4EC" }]}>
+              <Ionicons name="notifications" size={24} color="#C2185B" />
+            </View>
+            <Text style={styles.actionText}>Reminders</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Clinics List */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>
+              {searchQuery ? "Search Results" : "Nearby Clinics"}
+            </Text>
+            <TouchableOpacity
+              style={styles.refreshButton}
+              onPress={handleRefreshClinics}
+              disabled={refreshingClinics}
+            >
+              {refreshingClinics ? (
+                <ActivityIndicator size="small" color="#00BFA6" />
+              ) : (
+                <Ionicons name="refresh" size={16} color="#00BFA6" />
+              )}
+              <Text style={styles.refreshButtonText}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.sectionSubtitle}>
+            {filteredClinics.length} clinic
+            {filteredClinics.length !== 1 ? "s" : ""} found
           </Text>
-        </View>
-      </View>
 
-      {showWelcomeSplash && (
+          {filteredClinics.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="business-outline" size={60} color="#CCC" />
+              <Text style={styles.emptyText}>
+                {searchQuery || selectedServices.length > 0 || minRating > 0
+                  ? "No clinics found"
+                  : "No clinics available yet"}
+              </Text>
+              <Text style={styles.emptySubtext}>
+                {searchQuery || selectedServices.length > 0 || minRating > 0
+                  ? "Try adjusting your search or filters"
+                  : "Clinics will appear here once they register in the system"}
+              </Text>
+            </View>
+          ) : (
+            filteredClinics.map((clinic) => (
+              <TouchableOpacity
+                key={clinic.id}
+                style={styles.clinicCard}
+                onPress={() => handleClinicPress(clinic)}
+              >
+                <View style={styles.clinicIcon}>
+                  <Ionicons name="business" size={28} color="#00BFA6" />
+                </View>
+                <View style={styles.clinicInfo}>
+                  <Text style={styles.clinicName}>{clinic.name}</Text>
+                  <View style={styles.clinicLocation}>
+                    <Ionicons name="location" size={14} color="#666" />
+                    <Text style={styles.clinicAddress}>{clinic.address}</Text>
+                  </View>
+                  <View style={styles.clinicMeta}>
+                    <View style={styles.rating}>
+                      <Ionicons name="star" size={14} color="#FFB300" />
+                      <Text style={styles.ratingText}>{clinic.rating}</Text>
+                    </View>
+                    <Text style={styles.metaDivider}>•</Text>
+                    <Text style={styles.patients}>
+                      {clinic.totalPatients} patients
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={24} color="#CCC" />
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+
+        {/* Filter Modal */}
+        <Modal
+          visible={showFilters}
+          animationType="slide"
+          presentationStyle="pageSheet"
+          onRequestClose={() => setShowFilters(false)}
+        >
+          <View style={styles.modalContainer}>
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowFilters(false)}>
+                <Ionicons name="close" size={28} color="#333" />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Filters</Text>
+              <TouchableOpacity onPress={clearFilters}>
+                <Text style={styles.clearText}>Clear All</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalContent}>
+              {/* Services Filter */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterTitle}>Services Offered</Text>
+                <View style={styles.servicesGrid}>
+                  {availableServices.map((service) => (
+                    <TouchableOpacity
+                      key={service}
+                      style={[
+                        styles.serviceChip,
+                        selectedServices.includes(service) &&
+                          styles.serviceChipSelected,
+                      ]}
+                      onPress={() => toggleService(service)}
+                    >
+                      <Text
+                        style={[
+                          styles.serviceChipText,
+                          selectedServices.includes(service) &&
+                            styles.serviceChipTextSelected,
+                        ]}
+                      >
+                        {service}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Rating Filter */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterTitle}>Minimum Rating</Text>
+                <View style={styles.ratingOptions}>
+                  {[0, 3, 4, 4.5].map((rating) => (
+                    <TouchableOpacity
+                      key={rating}
+                      style={[
+                        styles.ratingOption,
+                        minRating === rating && styles.ratingOptionSelected,
+                      ]}
+                      onPress={() => setMinRating(rating)}
+                    >
+                      <Ionicons
+                        name="star"
+                        size={20}
+                        color={minRating === rating ? "#FFF" : "#FFB300"}
+                      />
+                      <Text
+                        style={[
+                          styles.ratingOptionText,
+                          minRating === rating &&
+                            styles.ratingOptionTextSelected,
+                        ]}
+                      >
+                        {rating === 0 ? "All" : `${rating}+`}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Sort By */}
+              <View style={styles.filterSection}>
+                <Text style={styles.filterTitle}>Sort By</Text>
+                <View style={styles.sortOptions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.sortOption,
+                      sortBy === "name" && styles.sortOptionSelected,
+                    ]}
+                    onPress={() => setSortBy("name")}
+                  >
+                    <Text
+                      style={[
+                        styles.sortOptionText,
+                        sortBy === "name" && styles.sortOptionTextSelected,
+                      ]}
+                    >
+                      Name (A-Z)
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.sortOption,
+                      sortBy === "rating" && styles.sortOptionSelected,
+                    ]}
+                    onPress={() => setSortBy("rating")}
+                  >
+                    <Text
+                      style={[
+                        styles.sortOptionText,
+                        sortBy === "rating" && styles.sortOptionTextSelected,
+                      ]}
+                    >
+                      Highest Rated
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.sortOption,
+                      sortBy === "patients" && styles.sortOptionSelected,
+                    ]}
+                    onPress={() => setSortBy("patients")}
+                  >
+                    <Text
+                      style={[
+                        styles.sortOptionText,
+                        sortBy === "patients" && styles.sortOptionTextSelected,
+                      ]}
+                    >
+                      Most Popular
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </ScrollView>
+
+            {/* Apply Button */}
+            <View style={styles.modalFooter}>
+              <TouchableOpacity
+                style={styles.applyButton}
+                onPress={() => setShowFilters(false)}
+              >
+                <Text style={styles.applyButtonText}>
+                  Apply Filters ({filteredClinics.length})
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      </ScrollView>
+
+      <Modal
+        visible={showWelcomeSplash}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => {
+          // Keep modal open until user explicitly taps Okay.
+        }}
+      >
         <View style={styles.splashOverlay}>
           <View style={styles.splashCard}>
             <Text style={styles.splashTitle}>Welcome to DentaCore AI</Text>
             <Text style={styles.splashText}>
-              Get personalized dental guidance and appointment help using our AI assistant.
+              Get personalized dental guidance and appointment help using our AI
+              assistant.
             </Text>
             <TouchableOpacity
               style={styles.splashButton}
@@ -145,294 +477,8 @@ export default function PatientHomeScreen({
             </TouchableOpacity>
           </View>
         </View>
-      )}
-
-      {/* Search Bar with Filters */}
-      <View style={styles.searchWrapper}>
-        <View style={styles.searchContainer}>
-          <Ionicons
-            name="search"
-            size={20}
-            color="#999"
-            style={styles.searchIcon}
-          />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search clinics by name or location..."
-            placeholderTextColor="#999"
-            value={searchQuery}
-            onChangeText={handleSearch}
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={() => handleSearch("")}>
-              <Ionicons name="close-circle" size={20} color="#999" />
-            </TouchableOpacity>
-          )}
-        </View>
-        <TouchableOpacity
-          style={styles.filterButton}
-          onPress={() => setShowFilters(true)}
-        >
-          <Ionicons name="options" size={20} color="#00BFA6" />
-          {activeFiltersCount > 0 && (
-            <View style={styles.filterBadge}>
-              <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* Quick Actions */}
-      <View style={styles.quickActions}>
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() => navigation.navigate("Appointments")}
-        >
-          <View style={[styles.actionIcon, { backgroundColor: "#E3F2FD" }]}>
-            <Ionicons name="calendar" size={24} color="#1976D2" />
-          </View>
-          <Text style={styles.actionText}>Appointments</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() => navigation.navigate("Records")}
-        >
-          <View style={[styles.actionIcon, { backgroundColor: "#E8F5E9" }]}>
-            <Ionicons name="document-text" size={24} color="#388E3C" />
-          </View>
-          <Text style={styles.actionText}>Records</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() => navigation.navigate("AIAssistant")}
-        >
-          <View style={[styles.actionIcon, { backgroundColor: "#FFF3E0" }]}>
-            <Ionicons name="chatbubbles" size={24} color="#F57C00" />
-          </View>
-          <Text style={styles.actionText}>AI Assistant</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionCard}
-          onPress={() =>
-            Alert.alert("Reminders", "You have no upcoming reminders")
-          }
-        >
-          <View style={[styles.actionIcon, { backgroundColor: "#FCE4EC" }]}>
-            <Ionicons name="notifications" size={24} color="#C2185B" />
-          </View>
-          <Text style={styles.actionText}>Reminders</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Clinics List */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>
-          {searchQuery ? "Search Results" : "Nearby Clinics"}
-        </Text>
-        <Text style={styles.sectionSubtitle}>
-          {filteredClinics.length} clinic
-          {filteredClinics.length !== 1 ? "s" : ""} found
-        </Text>
-
-        {filteredClinics.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="business-outline" size={60} color="#CCC" />
-            <Text style={styles.emptyText}>
-              {searchQuery || selectedServices.length > 0 || minRating > 0
-                ? "No clinics found"
-                : "No clinics available yet"}
-            </Text>
-            <Text style={styles.emptySubtext}>
-              {searchQuery || selectedServices.length > 0 || minRating > 0
-                ? "Try adjusting your search or filters"
-                : "Clinics will appear here once they register and log in"}
-            </Text>
-          </View>
-        ) : (
-          filteredClinics.map((clinic) => (
-            <TouchableOpacity
-              key={clinic.id}
-              style={styles.clinicCard}
-              onPress={() => handleClinicPress(clinic)}
-            >
-              <View style={styles.clinicIcon}>
-                <Ionicons name="business" size={28} color="#00BFA6" />
-              </View>
-              <View style={styles.clinicInfo}>
-                <Text style={styles.clinicName}>{clinic.name}</Text>
-                <View style={styles.clinicLocation}>
-                  <Ionicons name="location" size={14} color="#666" />
-                  <Text style={styles.clinicAddress}>{clinic.address}</Text>
-                </View>
-                <View style={styles.clinicMeta}>
-                  <View style={styles.rating}>
-                    <Ionicons name="star" size={14} color="#FFB300" />
-                    <Text style={styles.ratingText}>{clinic.rating}</Text>
-                  </View>
-                  <Text style={styles.metaDivider}>•</Text>
-                  <Text style={styles.patients}>
-                    {clinic.totalPatients} patients
-                  </Text>
-                </View>
-              </View>
-              <Ionicons name="chevron-forward" size={24} color="#CCC" />
-            </TouchableOpacity>
-          ))
-        )}
-      </View>
-
-      {/* Filter Modal */}
-      <Modal
-        visible={showFilters}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowFilters(false)}
-      >
-        <View style={styles.modalContainer}>
-          {/* Modal Header */}
-          <View style={styles.modalHeader}>
-            <TouchableOpacity onPress={() => setShowFilters(false)}>
-              <Ionicons name="close" size={28} color="#333" />
-            </TouchableOpacity>
-            <Text style={styles.modalTitle}>Filters</Text>
-            <TouchableOpacity onPress={clearFilters}>
-              <Text style={styles.clearText}>Clear All</Text>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={styles.modalContent}>
-            {/* Services Filter */}
-            <View style={styles.filterSection}>
-              <Text style={styles.filterTitle}>Services Offered</Text>
-              <View style={styles.servicesGrid}>
-                {availableServices.map((service) => (
-                  <TouchableOpacity
-                    key={service}
-                    style={[
-                      styles.serviceChip,
-                      selectedServices.includes(service) &&
-                        styles.serviceChipSelected,
-                    ]}
-                    onPress={() => toggleService(service)}
-                  >
-                    <Text
-                      style={[
-                        styles.serviceChipText,
-                        selectedServices.includes(service) &&
-                          styles.serviceChipTextSelected,
-                      ]}
-                    >
-                      {service}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Rating Filter */}
-            <View style={styles.filterSection}>
-              <Text style={styles.filterTitle}>Minimum Rating</Text>
-              <View style={styles.ratingOptions}>
-                {[0, 3, 4, 4.5].map((rating) => (
-                  <TouchableOpacity
-                    key={rating}
-                    style={[
-                      styles.ratingOption,
-                      minRating === rating && styles.ratingOptionSelected,
-                    ]}
-                    onPress={() => setMinRating(rating)}
-                  >
-                    <Ionicons
-                      name="star"
-                      size={20}
-                      color={minRating === rating ? "#FFF" : "#FFB300"}
-                    />
-                    <Text
-                      style={[
-                        styles.ratingOptionText,
-                        minRating === rating && styles.ratingOptionTextSelected,
-                      ]}
-                    >
-                      {rating === 0 ? "All" : `${rating}+`}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Sort By */}
-            <View style={styles.filterSection}>
-              <Text style={styles.filterTitle}>Sort By</Text>
-              <View style={styles.sortOptions}>
-                <TouchableOpacity
-                  style={[
-                    styles.sortOption,
-                    sortBy === "name" && styles.sortOptionSelected,
-                  ]}
-                  onPress={() => setSortBy("name")}
-                >
-                  <Text
-                    style={[
-                      styles.sortOptionText,
-                      sortBy === "name" && styles.sortOptionTextSelected,
-                    ]}
-                  >
-                    Name (A-Z)
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.sortOption,
-                    sortBy === "rating" && styles.sortOptionSelected,
-                  ]}
-                  onPress={() => setSortBy("rating")}
-                >
-                  <Text
-                    style={[
-                      styles.sortOptionText,
-                      sortBy === "rating" && styles.sortOptionTextSelected,
-                    ]}
-                  >
-                    Highest Rated
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.sortOption,
-                    sortBy === "patients" && styles.sortOptionSelected,
-                  ]}
-                  onPress={() => setSortBy("patients")}
-                >
-                  <Text
-                    style={[
-                      styles.sortOptionText,
-                      sortBy === "patients" && styles.sortOptionTextSelected,
-                    ]}
-                  >
-                    Most Popular
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </ScrollView>
-
-          {/* Apply Button */}
-          <View style={styles.modalFooter}>
-            <TouchableOpacity
-              style={styles.applyButton}
-              onPress={() => setShowFilters(false)}
-            >
-              <Text style={styles.applyButtonText}>
-                Apply Filters ({filteredClinics.length})
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
-      </ScrollView>
+
       <TouchableOpacity
         style={styles.chatFab}
         onPress={() => navigation.navigate("AIAssistant")}
@@ -568,11 +614,31 @@ const styles = StyleSheet.create({
   section: {
     padding: 20,
   },
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   sectionTitle: {
     fontSize: 20,
     fontWeight: "bold",
     color: "#333",
     marginBottom: 5,
+  },
+  refreshButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#E0F7F4",
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  refreshButtonText: {
+    color: "#00BFA6",
+    fontSize: 12,
+    fontWeight: "700",
+    marginLeft: 6,
   },
   sectionSubtitle: {
     fontSize: 14,

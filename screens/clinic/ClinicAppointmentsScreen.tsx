@@ -1,19 +1,25 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import { collection, getDocs, query, where } from "firebase/firestore";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     Alert,
+    Modal,
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
-import { Appointment } from "../../data/mockData";
+import { Appointment, StaffMember } from "../../data/mockData";
 import {
+    assignDentistToAppointment,
     getAppointmentsByClinic,
+    getStaffByClinic,
     updateAppointmentStatus,
 } from "../../services/dataService";
+import { db } from "../../services/firebase";
 
 interface ClinicAppointmentsScreenProps {
   navigation: any;
@@ -24,33 +30,208 @@ export default function ClinicAppointmentsScreen({
 }: ClinicAppointmentsScreenProps) {
   const { clinic } = useAuth();
   const [selectedFilter, setSelectedFilter] = useState<
-    "all" | "pending" | "confirmed" | "completed"
+    "all" | "pending" | "confirmed" | "completed" | "cancelled"
   >("all");
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [dentists, setDentists] = useState<StaffMember[]>([]);
+  const [assignModalVisible, setAssignModalVisible] = useState(false);
+  const [appointmentToAssign, setAppointmentToAssign] =
+    useState<Appointment | null>(null);
+  const [customDentistName, setCustomDentistName] = useState("");
+
+  useEffect(() => {
+    if (!clinic) {
+      setAppointments([]);
+      return;
+    }
+
+    const fetchedAppointments = getAppointmentsByClinic(clinic.id);
+    setAppointments(fetchedAppointments);
+  }, [clinic, refreshTrigger]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadDentists = async () => {
+      if (!clinic) {
+        if (isMounted) {
+          setDentists([]);
+        }
+        return;
+      }
+
+      try {
+        const staffQuery = query(
+          collection(db, "staffMembers"),
+          where("clinicId", "==", clinic.id),
+        );
+        const snapshot = await getDocs(staffQuery);
+        const fetchedStaff: StaffMember[] = snapshot.docs.map((staffDoc) => {
+          const staffData = staffDoc.data() as Omit<StaffMember, "id">;
+          return {
+            id: staffDoc.id,
+            ...staffData,
+          };
+        });
+
+        if (isMounted) {
+          setDentists(fetchedStaff);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setDentists(getStaffByClinic(clinic.id));
+        }
+      }
+    };
+
+    void loadDentists();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [clinic, refreshTrigger]);
+
+  const availableDentists = useMemo(
+    () =>
+      dentists.filter(
+        (staff) =>
+          staff.role.toLowerCase().includes("dentist") &&
+          staff.status?.toLowerCase() === "active",
+      ),
+    [dentists],
+  );
 
   if (!clinic) {
     return null;
   }
 
-  useEffect(() => {
-    const fetchedAppointments = getAppointmentsByClinic(clinic.id);
-    setAppointments(fetchedAppointments);
-  }, [clinic.id, refreshTrigger]);
+  const openAssignModal = (appointment: Appointment) => {
+    setAppointmentToAssign(appointment);
+    setAssignModalVisible(true);
+  };
+
+  const closeAssignModal = () => {
+    setAssignModalVisible(false);
+    setAppointmentToAssign(null);
+    setCustomDentistName("");
+  };
+
+  const handleDentistSelection = (dentist: StaffMember) => {
+    if (!appointmentToAssign) {
+      return;
+    }
+
+    const success = assignDentistToAppointment(
+      appointmentToAssign.id,
+      dentist.name,
+    );
+
+    if (success) {
+      Alert.alert(
+        "Dentist Assigned",
+        `${dentist.name} is now assigned to ${appointmentToAssign.patientName}.`,
+      );
+      closeAssignModal();
+      setRefreshTrigger((prev) => prev + 1);
+    } else {
+      Alert.alert("Error", "Failed to assign dentist");
+    }
+  };
+
+  const handleManualDentistAssign = () => {
+    if (!appointmentToAssign) {
+      return;
+    }
+
+    const trimmedName = customDentistName.trim();
+    if (!trimmedName) {
+      Alert.alert("Missing Name", "Please enter a dentist name first.");
+      return;
+    }
+
+    const success = assignDentistToAppointment(
+      appointmentToAssign.id,
+      trimmedName,
+    );
+    if (success) {
+      Alert.alert(
+        "Dentist Assigned",
+        `${trimmedName} is now assigned to ${appointmentToAssign.patientName}.`,
+      );
+      setCustomDentistName("");
+      closeAssignModal();
+      setRefreshTrigger((prev) => prev + 1);
+    } else {
+      Alert.alert("Error", "Failed to assign dentist");
+    }
+  };
+
+  const formatDentistName = (name?: string) => {
+    if (!name || !name.trim()) {
+      return "Dentist not assigned";
+    }
+
+    const trimmed = name.trim();
+    return trimmed.toLowerCase().startsWith("dr.") ? trimmed : `Dr. ${trimmed}`;
+  };
 
   const filteredAppointments = appointments.filter((apt) =>
     selectedFilter === "all" ? true : apt.status === selectedFilter,
   );
 
-  const handleUpdateStatus = (
+  const statusTabs: Array<{
+    key: typeof selectedFilter;
+    label: string;
+    count: number;
+  }> = [
+    { key: "all", label: "All", count: appointments.length },
+    {
+      key: "pending",
+      label: "Pending",
+      count: appointments.filter((a) => a.status === "pending").length,
+    },
+    {
+      key: "confirmed",
+      label: "Confirmed",
+      count: appointments.filter((a) => a.status === "confirmed").length,
+    },
+    {
+      key: "completed",
+      label: "Completed",
+      count: appointments.filter((a) => a.status === "completed").length,
+    },
+    {
+      key: "cancelled",
+      label: "Rejected",
+      count: appointments.filter((a) => a.status === "cancelled").length,
+    },
+  ];
+
+  const handleUpdateStatus = async (
     appointmentId: string,
     newStatus: Appointment["status"],
   ) => {
-    const success = updateAppointmentStatus(appointmentId, newStatus);
-    if (success) {
-      Alert.alert("Success", `Appointment ${newStatus}`);
-      setRefreshTrigger((prev) => prev + 1);
-    } else {
+    if (
+      newStatus === "confirmed" &&
+      !appointments.find((apt) => apt.id === appointmentId)?.dentistName
+    ) {
+      Alert.alert(
+        "Assign Dentist",
+        "Please assign a dentist before accepting this appointment.",
+      );
+      return;
+    }
+
+    try {
+      const success = await updateAppointmentStatus(appointmentId, newStatus);
+      if (success) {
+        Alert.alert("Success", `Appointment ${newStatus}`);
+        setRefreshTrigger((prev) => prev + 1);
+      } else {
+        Alert.alert("Error", "Failed to update appointment");
+      }
+    } catch (error) {
       Alert.alert("Error", "Failed to update appointment");
     }
   };
@@ -63,6 +244,8 @@ export default function ClinicAppointmentsScreen({
         return "#FFB300";
       case "completed":
         return "#666";
+      case "cancelled":
+        return "#F44336";
       default:
         return "#999";
     }
@@ -86,7 +269,7 @@ export default function ClinicAppointmentsScreen({
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Appointments</Text>
         <Text style={styles.headerSubtitle}>
-          Manage your clinic appointments
+          Review patient appointment requests
         </Text>
       </View>
 
@@ -97,67 +280,27 @@ export default function ClinicAppointmentsScreen({
         style={styles.tabsContainer}
         contentContainerStyle={styles.tabsContent}
       >
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "all" && styles.tabActive]}
-          onPress={() => setSelectedFilter("all")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "all" && styles.tabTextActive,
-            ]}
-          >
-            All ({appointments.length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "pending" && styles.tabActive]}
-          onPress={() => setSelectedFilter("pending")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "pending" && styles.tabTextActive,
-            ]}
-          >
-            Pending ({appointments.filter((a) => a.status === "pending").length}
-            )
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            selectedFilter === "confirmed" && styles.tabActive,
-          ]}
-          onPress={() => setSelectedFilter("confirmed")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "confirmed" && styles.tabTextActive,
-            ]}
-          >
-            Confirmed (
-            {appointments.filter((a) => a.status === "confirmed").length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            selectedFilter === "completed" && styles.tabActive,
-          ]}
-          onPress={() => setSelectedFilter("completed")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "completed" && styles.tabTextActive,
-            ]}
-          >
-            Completed (
-            {appointments.filter((a) => a.status === "completed").length})
-          </Text>
-        </TouchableOpacity>
+        {statusTabs.map((tabItem) => {
+          const isActive = selectedFilter === tabItem.key;
+          return (
+            <TouchableOpacity
+              key={tabItem.key}
+              style={[styles.tab, isActive && styles.tabActive]}
+              onPress={() => setSelectedFilter(tabItem.key)}
+            >
+              <Text
+                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+              >
+                {tabItem.label}
+              </Text>
+              <Text
+                style={[styles.tabCount, isActive && styles.tabCountActive]}
+              >
+                {tabItem.count}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
 
       {/* Appointments List */}
@@ -168,109 +311,209 @@ export default function ClinicAppointmentsScreen({
             <Text style={styles.emptyText}>No appointments found</Text>
           </View>
         ) : (
-          filteredAppointments.map((appointment) => (
-            <View key={appointment.id} style={styles.appointmentCard}>
-              <View style={styles.appointmentHeader}>
-                <View style={styles.patientInfo}>
-                  <View style={styles.patientAvatar}>
-                    <Text style={styles.avatarText}>
-                      {appointment.patientName
-                        .split(" ")
-                        .map((n) => n[0])
-                        .join("")}
+          filteredAppointments.map((appointment) => {
+            const hasDentistAssigned =
+              typeof appointment.dentistName === "string" &&
+              appointment.dentistName.trim().length > 0;
+
+            return (
+              <View key={appointment.id} style={styles.appointmentCard}>
+                <View style={styles.appointmentHeader}>
+                  <View style={styles.patientInfo}>
+                    <View style={styles.patientAvatar}>
+                      <Text style={styles.avatarText}>
+                        {appointment.patientName
+                          .split(" ")
+                          .map((n) => n[0])
+                          .join("")}
+                      </Text>
+                    </View>
+                    <View style={styles.patientDetails}>
+                      <Text style={styles.patientName}>
+                        {appointment.patientName}
+                      </Text>
+                      <Text style={styles.appointmentType}>
+                        {appointment.type}
+                      </Text>
+                    </View>
+                  </View>
+                  <View
+                    style={[
+                      styles.statusBadge,
+                      { backgroundColor: getStatusColor(appointment.status) },
+                    ]}
+                  >
+                    <Text style={styles.statusText}>
+                      {appointment.status.charAt(0).toUpperCase() +
+                        appointment.status.slice(1)}
                     </Text>
                   </View>
-                  <View style={styles.patientDetails}>
-                    <Text style={styles.patientName}>
-                      {appointment.patientName}
-                    </Text>
-                    <Text style={styles.appointmentType}>
-                      {appointment.type}
+                </View>
+
+                <View style={styles.appointmentDetails}>
+                  <View style={styles.detailRow}>
+                    <Ionicons name="person" size={16} color="#666" />
+                    <Text style={styles.detailText}>
+                      {formatDentistName(appointment.dentistName)}
                     </Text>
                   </View>
+                  <View style={styles.detailRow}>
+                    <Ionicons name="calendar" size={16} color="#666" />
+                    <Text style={styles.detailText}>{appointment.date}</Text>
+                  </View>
+                  <View style={styles.detailRow}>
+                    <Ionicons name="time" size={16} color="#666" />
+                    <Text style={styles.detailText}>{appointment.time}</Text>
+                  </View>
                 </View>
-                <View
-                  style={[
-                    styles.statusBadge,
-                    { backgroundColor: getStatusColor(appointment.status) },
-                  ]}
-                >
-                  <Text style={styles.statusText}>
-                    {appointment.status.charAt(0).toUpperCase() +
-                      appointment.status.slice(1)}
-                  </Text>
-                </View>
+
+                {(appointment.status === "pending" ||
+                  appointment.status === "confirmed") && (
+                  <View style={styles.assignRow}>
+                    <View style={styles.assignTextGroup}>
+                      <Text style={styles.assignLabel}>
+                        {hasDentistAssigned
+                          ? `Assigned Dentist: ${formatDentistName(appointment.dentistName)}`
+                          : "No dentist assigned yet"}
+                      </Text>
+                      {!hasDentistAssigned && (
+                        <Text style={styles.assignHint}>
+                          Assign a dentist before approving this request.
+                        </Text>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.assignButton,
+                        hasDentistAssigned
+                          ? styles.assignButtonSecondary
+                          : styles.assignButtonPrimary,
+                      ]}
+                      onPress={() => openAssignModal(appointment)}
+                    >
+                      <Text
+                        style={
+                          hasDentistAssigned
+                            ? styles.assignButtonSecondaryText
+                            : styles.assignButtonPrimaryText
+                        }
+                      >
+                        {hasDentistAssigned ? "Change" : "Assign"}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {appointment.status === "pending" && (
+                  <View style={styles.actionButtons}>
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.confirmButton]}
+                      onPress={() =>
+                        void handleUpdateStatus(appointment.id, "confirmed")
+                      }
+                    >
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        color="#FFF"
+                      />
+                      <Text style={styles.actionButtonText}>Accept</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.rejectButton]}
+                      onPress={() =>
+                        void handleUpdateStatus(appointment.id, "cancelled")
+                      }
+                    >
+                      <Ionicons name="close-circle" size={18} color="#FFF" />
+                      <Text style={styles.actionButtonText}>Reject</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {appointment.status === "confirmed" && (
+                  <View style={styles.actionButtons}>
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.completeButton]}
+                      onPress={() =>
+                        void handleUpdateStatus(appointment.id, "completed")
+                      }
+                    >
+                      <Text style={styles.actionButtonText}>
+                        Mark as Completed
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
-
-              <View style={styles.appointmentDetails}>
-                <View style={styles.detailRow}>
-                  <Ionicons name="person" size={16} color="#666" />
-                  <Text style={styles.detailText}>
-                    Dr. {appointment.dentistName}
-                  </Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Ionicons name="calendar" size={16} color="#666" />
-                  <Text style={styles.detailText}>{appointment.date}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Ionicons name="time" size={16} color="#666" />
-                  <Text style={styles.detailText}>{appointment.time}</Text>
-                </View>
-              </View>
-
-              {appointment.status === "pending" && (
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.confirmButton]}
-                    onPress={() =>
-                      handleUpdateStatus(appointment.id, "confirmed")
-                    }
-                  >
-                    <Ionicons name="checkmark-circle" size={18} color="#FFF" />
-                    <Text style={styles.actionButtonText}>Confirm</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.rescheduleButton]}
-                    onPress={() =>
-                      Alert.alert(
-                        "Reschedule",
-                        "Reschedule feature coming soon",
-                      )
-                    }
-                  >
-                    <Ionicons name="calendar" size={18} color="#00BFA6" />
-                    <Text style={styles.rescheduleText}>Reschedule</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.cancelButton]}
-                    onPress={() =>
-                      handleUpdateStatus(appointment.id, "cancelled")
-                    }
-                  >
-                    <Ionicons name="close-circle" size={18} color="#F44336" />
-                  </TouchableOpacity>
-                </View>
-              )}
-
-              {appointment.status === "confirmed" && (
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.completeButton]}
-                    onPress={() =>
-                      handleUpdateStatus(appointment.id, "completed")
-                    }
-                  >
-                    <Text style={styles.actionButtonText}>
-                      Mark as Completed
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-          ))
+            );
+          })
         )}
       </ScrollView>
+
+      <Modal visible={assignModalVisible} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Assign Dentist</Text>
+            {availableDentists.length === 0 ? (
+              <View style={styles.noDentistState}>
+                <Ionicons name="warning-outline" size={36} color="#FFB300" />
+                <Text style={styles.noDentistText}>
+                  No active dentists found for this clinic.
+                </Text>
+                <Text style={styles.noDentistSubtext}>
+                  Activate a dentist from Staff Management or assign one
+                  manually below.
+                </Text>
+                <TextInput
+                  style={styles.manualInput}
+                  placeholder="Enter dentist name"
+                  placeholderTextColor="#AAA"
+                  value={customDentistName}
+                  onChangeText={setCustomDentistName}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.manualAssignButton,
+                    !customDentistName.trim() &&
+                      styles.manualAssignButtonDisabled,
+                  ]}
+                  onPress={handleManualDentistAssign}
+                  disabled={!customDentistName.trim()}
+                >
+                  <Text style={styles.manualAssignButtonText}>
+                    Assign Dentist
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <ScrollView style={styles.dentistList}>
+                {availableDentists.map((dentist) => (
+                  <TouchableOpacity
+                    key={dentist.id}
+                    style={styles.dentistCard}
+                    onPress={() => handleDentistSelection(dentist)}
+                  >
+                    <Text style={styles.dentistName}>{dentist.name}</Text>
+                    <Text style={styles.dentistRole}>{dentist.role}</Text>
+                    <Text style={styles.dentistAvailability}>
+                      {dentist.status?.toLowerCase() === "active"
+                        ? "Available"
+                        : "Unavailable"}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+            <TouchableOpacity
+              style={styles.modalCloseButton}
+              onPress={closeAssignModal}
+            >
+              <Text style={styles.modalCloseText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -324,25 +567,46 @@ const styles = StyleSheet.create({
     borderBottomColor: "#F0F0F0",
   },
   tabsContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    columnGap: 14,
   },
   tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 10,
-    borderRadius: 20,
+    width: 125,
+    height: 110,
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+    borderRadius: 24,
     backgroundColor: "#F5F5F5",
+    justifyContent: "space-between",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   tabActive: {
     backgroundColor: "#00BFA6",
   },
-  tabText: {
-    fontSize: 14,
+  tabLabel: {
+    fontSize: 13,
     fontWeight: "600",
-    color: "#666",
+    color: "#555",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
-  tabTextActive: {
+  tabLabelActive: {
+    color: "#E3FFF9",
+  },
+  tabCount: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#222",
+  },
+  tabCountActive: {
     color: "#FFF",
   },
   content: {
@@ -421,6 +685,50 @@ const styles = StyleSheet.create({
     color: "#666",
     marginLeft: 8,
   },
+  assignRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 8,
+    paddingVertical: 10,
+    borderTopWidth: 1,
+    borderColor: "#F0F0F0",
+    gap: 12,
+  },
+  assignTextGroup: {
+    flex: 1,
+  },
+  assignLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#333",
+  },
+  assignHint: {
+    fontSize: 12,
+    color: "#999",
+    marginTop: 2,
+  },
+  assignButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    minWidth: 90,
+    alignItems: "center",
+  },
+  assignButtonPrimary: {
+    backgroundColor: "#00BFA6",
+  },
+  assignButtonSecondary: {
+    backgroundColor: "#E0F2F0",
+  },
+  assignButtonPrimaryText: {
+    color: "#FFF",
+    fontWeight: "600",
+  },
+  assignButtonSecondaryText: {
+    color: "#007F6D",
+    fontWeight: "600",
+  },
   actionButtons: {
     flexDirection: "row",
     gap: 8,
@@ -438,17 +746,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#4CAF50",
   },
-  rescheduleButton: {
+  rejectButton: {
     flex: 1,
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: "#00BFA6",
-  },
-  cancelButton: {
-    backgroundColor: "#FFF",
-    borderWidth: 1,
-    borderColor: "#F44336",
-    paddingHorizontal: 12,
+    backgroundColor: "#F44336",
   },
   completeButton: {
     flex: 1,
@@ -456,12 +756,6 @@ const styles = StyleSheet.create({
   },
   actionButtonText: {
     color: "#FFF",
-    fontSize: 14,
-    fontWeight: "600",
-    marginLeft: 6,
-  },
-  rescheduleText: {
-    color: "#00BFA6",
     fontSize: 14,
     fontWeight: "600",
     marginLeft: 6,
@@ -475,5 +769,102 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#999",
     marginTop: 15,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalCard: {
+    width: "100%",
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 20,
+    maxHeight: "80%",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#333",
+    marginBottom: 12,
+  },
+  dentistList: {
+    maxHeight: 280,
+  },
+  dentistCard: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F0",
+  },
+  dentistName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111",
+  },
+  dentistRole: {
+    fontSize: 13,
+    color: "#666",
+    marginTop: 2,
+  },
+  dentistAvailability: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#4CAF50",
+  },
+  modalCloseButton: {
+    marginTop: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: "#F5F5F5",
+    alignItems: "center",
+  },
+  modalCloseText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#333",
+  },
+  noDentistState: {
+    alignItems: "center",
+    paddingVertical: 20,
+    gap: 8,
+  },
+  noDentistText: {
+    textAlign: "center",
+    color: "#666",
+    fontSize: 14,
+  },
+  noDentistSubtext: {
+    textAlign: "center",
+    color: "#888",
+    fontSize: 13,
+    marginHorizontal: 10,
+  },
+  manualInput: {
+    width: "100%",
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 10,
+    color: "#111",
+  },
+  manualAssignButton: {
+    width: "100%",
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: "#00BFA6",
+    alignItems: "center",
+  },
+  manualAssignButtonDisabled: {
+    backgroundColor: "#A0DAD1",
+  },
+  manualAssignButtonText: {
+    color: "#FFF",
+    fontWeight: "700",
   },
 });

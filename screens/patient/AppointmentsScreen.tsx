@@ -35,6 +35,15 @@ export default function AppointmentsScreen({
 
   const appointments = user ? getAppointmentsByPatient(user.id) : [];
 
+  const formatDentistName = (name?: string) => {
+    if (!name || !name.trim()) {
+      return "Awaiting dentist assignment";
+    }
+
+    const trimmed = name.trim();
+    return trimmed.toLowerCase().startsWith("dr.") ? trimmed : `Dr. ${trimmed}`;
+  };
+
   const filteredAppointments = appointments.filter((apt) => {
     if (selectedTab === "all") return true;
     return apt.status === selectedTab;
@@ -73,7 +82,7 @@ export default function AppointmentsScreen({
   const handleViewDetails = (appointment: Appointment) => {
     Alert.alert(
       "Appointment Details",
-      `Clinic: ${appointment.clinicName}\nDoctor: ${appointment.dentistName}\nType: ${appointment.type}\nDate: ${appointment.date}\nTime: ${appointment.time}\nStatus: ${appointment.status}`,
+      `Clinic: ${appointment.clinicName}\nDoctor: ${formatDentistName(appointment.dentistName)}\nType: ${appointment.type}\nDate: ${appointment.date}\nTime: ${appointment.time}\nStatus: ${appointment.status}`,
       [{ text: "OK" }],
     );
   };
@@ -110,7 +119,9 @@ export default function AppointmentsScreen({
 
   const handleRescheduleSuccess = () => {
     setRefreshTrigger((prev) => prev + 1);
-    setFeedbackMessage("Appointment rescheduled. Waiting for clinic confirmation.");
+    setFeedbackMessage(
+      "Appointment rescheduled. Waiting for clinic confirmation.",
+    );
     setTimeout(() => setFeedbackMessage(""), 2400);
   };
 
@@ -218,8 +229,15 @@ export default function AppointmentsScreen({
                   <Text style={styles.clinicName}>
                     {appointment.clinicName}
                   </Text>
-                  <Text style={styles.doctorName}>
-                    Dr. {appointment.dentistName}
+                  <Text
+                    style={[
+                      styles.doctorName,
+                      (!appointment.dentistName ||
+                        appointment.dentistName.trim().length === 0) &&
+                        styles.doctorNamePending,
+                    ]}
+                  >
+                    {formatDentistName(appointment.dentistName)}
                   </Text>
                 </View>
                 <View
@@ -404,6 +422,10 @@ const styles = StyleSheet.create({
   doctorName: {
     fontSize: 14,
     color: "#666",
+  },
+  doctorNamePending: {
+    color: "#FF8A00",
+    fontStyle: "italic",
   },
   statusBadge: {
     paddingHorizontal: 12,

@@ -118,9 +118,22 @@ export default function ClinicProfileScreen({
       {
         text: "Logout",
         style: "destructive",
-        onPress: () => {
-          logout();
-          navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
+        onPress: async () => {
+          await logout();
+
+          let rootNavigation = navigation;
+          while (rootNavigation?.getParent?.()) {
+            rootNavigation = rootNavigation.getParent();
+          }
+
+          if (rootNavigation?.reset) {
+            rootNavigation.reset({ index: 0, routes: [{ name: "Auth" }] });
+            return;
+          }
+
+          if (navigation?.replace) {
+            navigation.replace("Auth");
+          }
         },
       },
     ]);

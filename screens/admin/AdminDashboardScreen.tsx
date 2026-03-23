@@ -30,7 +30,9 @@ export default function AdminDashboardScreen({
   const users = getAllUsers();
 
   const forecastGrowthRate = 0.12; // 12% forecast growth
-  const predictedRevenue = Math.round(stats.totalRevenue * (1 + forecastGrowthRate));
+  const predictedRevenue = Math.round(
+    stats.totalRevenue * (1 + forecastGrowthRate),
+  );
 
   return (
     <ScrollView style={styles.container}>
@@ -449,27 +451,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#999",
     marginBottom: 20,
-  },
-  chartContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "flex-end",
-    height: 120,
-  },
-  chartBar: {
-    flex: 1,
-    alignItems: "center",
-  },
-  bar: {
-    width: "70%",
-    backgroundColor: "#7C4DFF",
-    borderRadius: 4,
-    minHeight: 20,
-  },
-  barLabel: {
-    fontSize: 11,
-    color: "#999",
-    marginTop: 5,
   },
   actionsGrid: {
     flexDirection: "row",

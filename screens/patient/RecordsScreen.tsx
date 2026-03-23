@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import {
+    ActivityIndicator,
     Alert,
     ScrollView,
     StyleSheet,
@@ -9,6 +10,7 @@ import {
     View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
+import { DentalRecord } from "../../data/mockData";
 import { getRecordsByPatient } from "../../services/dataService";
 
 interface RecordsScreenProps {
@@ -17,9 +19,46 @@ interface RecordsScreenProps {
 
 export default function RecordsScreen({ navigation }: RecordsScreenProps) {
   const { user } = useAuth();
-  const records = user ? getRecordsByPatient(user.id) : [];
+  const [records, setRecords] = React.useState<DentalRecord[]>([]);
+  const [isLoadingRecords, setIsLoadingRecords] = React.useState(true);
 
-  const handleViewRecord = (record: any) => {
+  React.useEffect(() => {
+    let isMounted = true;
+
+    const loadRecords = async () => {
+      if (!user) {
+        if (isMounted) {
+          setRecords([]);
+          setIsLoadingRecords(false);
+        }
+        return;
+      }
+
+      setIsLoadingRecords(true);
+      try {
+        const fetchedRecords = await getRecordsByPatient(user.id);
+        if (isMounted) {
+          setRecords(fetchedRecords);
+        }
+      } catch (error) {
+        if (isMounted) {
+          setRecords([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingRecords(false);
+        }
+      }
+    };
+
+    void loadRecords();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  const handleViewRecord = (record: DentalRecord) => {
     Alert.alert(
       "Dental Record",
       `Clinic: ${record.clinicName}\nDoctor: ${record.dentistName}\nDate: ${record.date}\nType: ${record.type}\n\nDescription:\n${record.description}\n\nTreatment:\n${record.treatment}\n\nNotes:\n${record.notes}`,
@@ -27,7 +66,7 @@ export default function RecordsScreen({ navigation }: RecordsScreenProps) {
     );
   };
 
-  const handleDownload = (record: any) => {
+  const handleDownload = (record: DentalRecord) => {
     Alert.alert("Download", `Download record from ${record.clinicName}?`);
   };
 
@@ -75,7 +114,12 @@ export default function RecordsScreen({ navigation }: RecordsScreenProps) {
         <Text style={styles.sectionTitle}>Treatment History</Text>
 
         {/* Records List */}
-        {records.length === 0 ? (
+        {isLoadingRecords ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#00BFA6" />
+            <Text style={styles.loadingText}>Loading dental records...</Text>
+          </View>
+        ) : records.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="document-text-outline" size={60} color="#CCC" />
             <Text style={styles.emptyText}>No records found</Text>
@@ -311,6 +355,15 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#00BFA6",
     marginLeft: 8,
+  },
+  loadingState: {
+    alignItems: "center",
+    paddingVertical: 40,
+  },
+  loadingText: {
+    marginTop: 10,
+    color: "#666",
+    fontSize: 14,
   },
   emptyState: {
     alignItems: "center",

@@ -1,15 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
+import { addDoc, collection, getDocs, query, where } from "firebase/firestore";
 import React from "react";
 import {
+    ActivityIndicator,
     Alert,
+    Modal,
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
+import { StaffMember } from "../../data/mockData";
 import { getStaffByClinic } from "../../services/dataService";
+import { db } from "../../services/firebase";
 
 interface ClinicStaffScreenProps {
   navigation: any;
@@ -19,12 +25,56 @@ export default function ClinicStaffScreen({
   navigation,
 }: ClinicStaffScreenProps) {
   const { clinic } = useAuth();
+  const [showAddModal, setShowAddModal] = React.useState(false);
+  const [isLoadingStaff, setIsLoadingStaff] = React.useState(true);
+  const [staffMembers, setStaffMembers] = React.useState<StaffMember[]>([]);
+  const [staffType, setStaffType] = React.useState<"dentist" | "staff">(
+    "dentist",
+  );
+  const [staffName, setStaffName] = React.useState("");
+  const [staffEmail, setStaffEmail] = React.useState("");
+  const [staffPhone, setStaffPhone] = React.useState("");
+  const [staffRole, setStaffRole] = React.useState("");
+
+  const loadStaffMembers = React.useCallback(async () => {
+    if (!clinic) {
+      setStaffMembers([]);
+      setIsLoadingStaff(false);
+      return;
+    }
+
+    setIsLoadingStaff(true);
+    try {
+      const staffQuery = query(
+        collection(db, "staffMembers"),
+        where("clinicId", "==", clinic.id),
+      );
+
+      const snapshot = await getDocs(staffQuery);
+      const fetchedStaff: StaffMember[] = snapshot.docs.map((staffDoc) => {
+        const staffData = staffDoc.data() as Omit<StaffMember, "id">;
+        return {
+          id: staffDoc.id,
+          ...staffData,
+        };
+      });
+
+      setStaffMembers(fetchedStaff);
+    } catch (error) {
+      // If Firestore is unavailable, keep app usable via local mock data.
+      setStaffMembers(getStaffByClinic(clinic.id));
+    } finally {
+      setIsLoadingStaff(false);
+    }
+  }, [clinic]);
+
+  React.useEffect(() => {
+    void loadStaffMembers();
+  }, [loadStaffMembers]);
 
   if (!clinic) {
     return null;
   }
-
-  const staffMembers = getStaffByClinic(clinic.id);
 
   // Group staff by role
   const dentists = staffMembers.filter(
@@ -82,6 +132,55 @@ export default function ClinicStaffScreen({
     </View>
   );
 
+  const resetAddForm = () => {
+    setStaffType("dentist");
+    setStaffName("");
+    setStaffEmail("");
+    setStaffPhone("");
+    setStaffRole("");
+  };
+
+  const handleAddStaff = async () => {
+    const name = staffName.trim();
+    const email = staffEmail.trim().toLowerCase();
+    const phone = staffPhone.trim();
+    const role =
+      staffType === "dentist" ? "Dentist" : staffRole.trim() || "Staff";
+
+    if (!name || !email || !phone) {
+      Alert.alert("Error", "Please fill in name, email, and phone.");
+      return;
+    }
+
+    if (!email.includes("@")) {
+      Alert.alert("Error", "Please enter a valid email address.");
+      return;
+    }
+
+    if (staffType === "staff" && !staffRole.trim()) {
+      Alert.alert("Error", "Please enter staff role/position.");
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, "staffMembers"), {
+        name,
+        role,
+        email,
+        phone,
+        clinicId: clinic.id,
+        status: "active",
+      });
+
+      setShowAddModal(false);
+      resetAddForm();
+      await loadStaffMembers();
+      Alert.alert("Success", `${role} added to your clinic staff.`);
+    } catch (error) {
+      Alert.alert("Error", "Failed to add staff member. Please try again.");
+    }
+  };
+
   return (
     <View style={styles.container}>
       {/* Navigation Bar */}
@@ -103,70 +202,170 @@ export default function ClinicStaffScreen({
       </View>
 
       <ScrollView style={styles.content}>
-        {/* Summary Cards */}
-        <View style={styles.summaryContainer}>
-          <View style={[styles.summaryCard, { backgroundColor: "#2196F3" }]}>
-            <Ionicons name="people" size={32} color="#FFF" />
-            <Text style={styles.summaryValue}>
-              {staffMembers.filter((s) => s.status === "active").length}
-            </Text>
-            <Text style={styles.summaryLabel}>Active Staff</Text>
+        {isLoadingStaff ? (
+          <View style={styles.loadingState}>
+            <ActivityIndicator size="large" color="#00BFA6" />
+            <Text style={styles.loadingText}>Loading clinic staff...</Text>
           </View>
-          <View style={[styles.summaryCard, { backgroundColor: "#4CAF50" }]}>
-            <Ionicons name="medical" size={32} color="#FFF" />
-            <Text style={styles.summaryValue}>{dentists.length}</Text>
-            <Text style={styles.summaryLabel}>Dentists</Text>
-          </View>
-        </View>
+        ) : (
+          <>
+            {/* Summary Cards */}
+            <View style={styles.summaryContainer}>
+              <View
+                style={[styles.summaryCard, { backgroundColor: "#2196F3" }]}
+              >
+                <Ionicons name="people" size={32} color="#FFF" />
+                <Text style={styles.summaryValue}>
+                  {staffMembers.filter((s) => s.status === "active").length}
+                </Text>
+                <Text style={styles.summaryLabel}>Active Staff</Text>
+              </View>
+              <View
+                style={[styles.summaryCard, { backgroundColor: "#4CAF50" }]}
+              >
+                <Ionicons name="medical" size={32} color="#FFF" />
+                <Text style={styles.summaryValue}>{dentists.length}</Text>
+                <Text style={styles.summaryLabel}>Dentists</Text>
+              </View>
+            </View>
 
-        {/* Dentists Section */}
-        {dentists.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              <Ionicons name="medical" size={18} color="#333" /> Dentists
-            </Text>
-            {dentists.map(renderStaffMember)}
-          </View>
-        )}
+            {/* Dentists Section */}
+            {dentists.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="medical" size={18} color="#333" /> Dentists
+                </Text>
+                {dentists.map(renderStaffMember)}
+              </View>
+            )}
 
-        {/* Hygienists Section */}
-        {hygienists.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              <Ionicons name="fitness" size={18} color="#333" /> Dental
-              Hygienists
-            </Text>
-            {hygienists.map(renderStaffMember)}
-          </View>
-        )}
+            {/* Hygienists Section */}
+            {hygienists.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="fitness" size={18} color="#333" /> Dental
+                  Hygienists
+                </Text>
+                {hygienists.map(renderStaffMember)}
+              </View>
+            )}
 
-        {/* Support Staff Section */}
-        {support.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>
-              <Ionicons name="people" size={18} color="#333" /> Support Staff
-            </Text>
-            {support.map(renderStaffMember)}
-          </View>
-        )}
+            {/* Support Staff Section */}
+            {support.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>
+                  <Ionicons name="people" size={18} color="#333" /> Support
+                  Staff
+                </Text>
+                {support.map(renderStaffMember)}
+              </View>
+            )}
 
-        {staffMembers.length === 0 && (
-          <View style={styles.emptyState}>
-            <Ionicons name="people-outline" size={60} color="#CCC" />
-            <Text style={styles.emptyText}>No staff members</Text>
-          </View>
+            {staffMembers.length === 0 && (
+              <View style={styles.emptyState}>
+                <Ionicons name="people-outline" size={60} color="#CCC" />
+                <Text style={styles.emptyText}>No staff members</Text>
+              </View>
+            )}
+          </>
         )}
       </ScrollView>
 
       {/* Add Staff Button */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() =>
-          Alert.alert("Add Staff", "Add new staff member feature coming soon")
-        }
+        onPress={() => setShowAddModal(true)}
       >
         <Ionicons name="person-add" size={28} color="#FFF" />
       </TouchableOpacity>
+
+      <Modal
+        visible={showAddModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAddModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Add Team Member</Text>
+              <TouchableOpacity onPress={() => setShowAddModal(false)}>
+                <Ionicons name="close" size={24} color="#666" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.typeSwitchRow}>
+              <TouchableOpacity
+                style={[
+                  styles.typeChip,
+                  staffType === "dentist" && styles.typeChipActive,
+                ]}
+                onPress={() => setStaffType("dentist")}
+              >
+                <Text
+                  style={[
+                    styles.typeChipText,
+                    staffType === "dentist" && styles.typeChipTextActive,
+                  ]}
+                >
+                  Dentist
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.typeChip,
+                  staffType === "staff" && styles.typeChipActive,
+                ]}
+                onPress={() => setStaffType("staff")}
+              >
+                <Text
+                  style={[
+                    styles.typeChipText,
+                    staffType === "staff" && styles.typeChipTextActive,
+                  ]}
+                >
+                  Staff
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Full name"
+              value={staffName}
+              onChangeText={setStaffName}
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Email"
+              autoCapitalize="none"
+              keyboardType="email-address"
+              value={staffEmail}
+              onChangeText={setStaffEmail}
+            />
+            <TextInput
+              style={styles.modalInput}
+              placeholder="Phone"
+              keyboardType="phone-pad"
+              value={staffPhone}
+              onChangeText={setStaffPhone}
+            />
+
+            {staffType === "staff" && (
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Role / Position (e.g., Receptionist)"
+                value={staffRole}
+                onChangeText={setStaffRole}
+              />
+            )}
+
+            <TouchableOpacity style={styles.addButton} onPress={handleAddStaff}>
+              <Text style={styles.addButtonText}>Add Member</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -338,6 +537,16 @@ const styles = StyleSheet.create({
     color: "#999",
     marginTop: 15,
   },
+  loadingState: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 50,
+  },
+  loadingText: {
+    marginTop: 10,
+    color: "#666",
+    fontSize: 14,
+  },
   fab: {
     position: "absolute",
     right: 20,
@@ -353,5 +562,75 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    backgroundColor: "#FFF",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 20,
+    gap: 10,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#333",
+  },
+  typeSwitchRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 4,
+  },
+  typeChip: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 10,
+    paddingVertical: 10,
+    alignItems: "center",
+    backgroundColor: "#F7F7F7",
+  },
+  typeChipActive: {
+    borderColor: "#00BFA6",
+    backgroundColor: "#E0F7F4",
+  },
+  typeChipText: {
+    color: "#666",
+    fontWeight: "600",
+  },
+  typeChipTextActive: {
+    color: "#00BFA6",
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#DDD",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: "#333",
+    backgroundColor: "#FFF",
+  },
+  addButton: {
+    marginTop: 8,
+    backgroundColor: "#00BFA6",
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  addButtonText: {
+    color: "#FFF",
+    fontSize: 15,
+    fontWeight: "700",
   },
 });

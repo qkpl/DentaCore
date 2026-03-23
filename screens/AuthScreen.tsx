@@ -18,7 +18,9 @@ export default function AuthScreen() {
   const navigation = useNavigation<any>();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [name, setName] = useState("");
+  const [clinicAddress, setClinicAddress] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userType, setUserType] = useState<"patient" | "clinic" | "admin">(
@@ -29,6 +31,8 @@ export default function AuthScreen() {
   const handleAuth = async () => {
     const cleanedEmail = email.trim();
     const cleanedPassword = password.trim();
+    const cleanedConfirmPassword = confirmPassword.trim();
+    const cleanedClinicAddress = clinicAddress.trim();
 
     if (!cleanedEmail || !cleanedPassword) {
       Alert.alert("Error", "Please fill in all fields");
@@ -53,11 +57,27 @@ export default function AuthScreen() {
           return;
         }
 
+        if (!cleanedConfirmPassword) {
+          Alert.alert("Error", "Please confirm your password");
+          return;
+        }
+
+        if (cleanedPassword !== cleanedConfirmPassword) {
+          Alert.alert("Error", "Passwords do not match");
+          return;
+        }
+
+        if (userType === "clinic" && !cleanedClinicAddress) {
+          Alert.alert("Error", "Clinic address is required");
+          return;
+        }
+
         const result = await signup(
           cleanedEmail,
           cleanedPassword,
           userType,
           name || cleanedEmail.split("@")[0],
+          userType === "clinic" ? cleanedClinicAddress : undefined,
         );
 
         if (!result.success) {
@@ -65,6 +85,9 @@ export default function AuthScreen() {
         } else {
           Alert.alert("Success", result.message);
           setIsSignUp(false);
+          setPassword("");
+          setConfirmPassword("");
+          setClinicAddress("");
           navigation.reset({ index: 0, routes: [{ name: "Auth" }] });
         }
       } else {
@@ -72,14 +95,17 @@ export default function AuthScreen() {
         const result = await login(cleanedEmail, cleanedPassword);
 
         if (!result.success) {
-          Alert.alert("Error", result.message || "Invalid credentials. Please try again.");
+          Alert.alert(
+            "Error",
+            result.message || "Invalid credentials. Please try again.",
+          );
         } else {
           const routeName =
             userType === "patient"
               ? "PatientApp"
               : userType === "clinic"
-              ? "ClinicApp"
-              : "AdminApp";
+                ? "ClinicApp"
+                : "AdminApp";
           navigation.reset({
             index: 0,
             routes: [{ name: routeName }],
@@ -119,7 +145,9 @@ export default function AuthScreen() {
             <Text style={styles.logoEmoji}>🦷</Text>
           </View>
           <Text style={styles.title}>DentaCore</Text>
-          <Text style={styles.subtitle}>DentaCore: Connecting Smiles to Care.</Text>
+          <Text style={styles.subtitle}>
+            DentaCore: Connecting Smiles to Care.
+          </Text>
         </View>
 
         <View style={styles.formContainer}>
@@ -251,6 +279,34 @@ export default function AuthScreen() {
           </View>
 
           {isSignUp && userType !== "admin" && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Confirm Password</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter password"
+                placeholderTextColor="#999"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry
+              />
+            </View>
+          )}
+
+          {isSignUp && userType === "clinic" && (
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Clinic Address</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter clinic address"
+                placeholderTextColor="#999"
+                value={clinicAddress}
+                onChangeText={setClinicAddress}
+                autoCapitalize="words"
+              />
+            </View>
+          )}
+
+          {isSignUp && userType !== "admin" && (
             <View style={styles.roleInfo}>
               <Text style={styles.roleText}>
                 {userType === "patient" &&
@@ -275,7 +331,11 @@ export default function AuthScreen() {
             disabled={isSubmitting}
           >
             <Text style={styles.buttonText}>
-              {isSubmitting ? "Please wait..." : isSignUp ? "Sign Up" : "Sign In"}
+              {isSubmitting
+                ? "Please wait..."
+                : isSignUp
+                  ? "Sign Up"
+                  : "Sign In"}
             </Text>
           </TouchableOpacity>
 

@@ -1,3 +1,10 @@
+import { Clinic, mockClinics, mockUsers, User } from "@/data/mockData";
+import {
+  activateClinic,
+  getClinicById,
+  syncAppointmentsFromFirestore,
+} from "@/services/dataService";
+import { auth, db } from "@/services/firebase";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -5,10 +12,12 @@ import {
   signOut,
 } from "firebase/auth";
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
   setDoc,
-  updateDoc
+  updateDoc,
 } from "firebase/firestore";
 import React, {
   createContext,
@@ -17,17 +26,6 @@ import React, {
   useEffect,
   useState,
 } from "react";
-import {
-  Clinic,
-  mockClinics,
-  mockUsers,
-  User
-} from "../data/mockData";
-import {
-  activateClinic,
-  getClinicById
-} from "../services/dataService";
-import { auth, db } from "../services/firebase";
 
 interface AuthResponse {
   success: boolean;
@@ -43,8 +41,10 @@ interface AuthContextType {
     password: string,
     role: "patient" | "clinic" | "admin",
     name?: string,
+    clinicAddress?: string,
   ) => Promise<AuthResponse>;
   logout: () => Promise<void>;
+  refreshClinics: () => Promise<void>;
   isAuthenticated: boolean;
 }
 
@@ -55,6 +55,7 @@ const localSignup = async (
   password: string,
   role: "patient" | "clinic" | "admin",
   name?: string,
+  clinicAddress?: string,
 ): Promise<AuthResponse> => {
   if (role === "admin") {
     return { success: false, message: "Admin accounts cannot be registered" };
@@ -88,10 +89,14 @@ const localSignup = async (
   };
 
   if (role === "clinic") {
+    if (!clinicAddress?.trim()) {
+      return { success: false, message: "Clinic address is required" };
+    }
+
     const newClinic: Clinic = {
       id: newUserId,
       name: `${userName} Clinic`,
-      address: "",
+      address: clinicAddress.trim(),
       phone: "",
       email,
       description: "New dental clinic",
@@ -133,6 +138,34 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const [user, setUser] = useState<User | null>(null);
   const [clinic, setClinic] = useState<Clinic | null>(null);
 
+  const upsertMockClinic = (clinicData: Clinic): void => {
+    const index = mockClinics.findIndex((item) => item.id === clinicData.id);
+    if (index === -1) {
+      mockClinics.push(clinicData);
+      return;
+    }
+
+    mockClinics[index] = {
+      ...mockClinics[index],
+      ...clinicData,
+    };
+  };
+
+  const syncClinicsFromFirestore = async (): Promise<void> => {
+    try {
+      const clinicsSnapshot = await getDocs(collection(db, "clinics"));
+      clinicsSnapshot.forEach((clinicDoc) => {
+        const clinicData = clinicDoc.data() as Clinic;
+        upsertMockClinic({
+          ...clinicData,
+          id: clinicData.id || clinicDoc.id,
+        });
+      });
+    } catch (error) {
+      // Ignore sync failures and keep using currently available local data.
+    }
+  };
+
   const setClinicForUser = async (userRecord: User): Promise<void> => {
     if (userRecord.role === "clinic" && userRecord.clinicId) {
       // Firestore clinic first
@@ -140,6 +173,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         const clinicDoc = await getDoc(doc(db, "clinics", userRecord.clinicId));
         if (clinicDoc.exists()) {
           const clinicData = clinicDoc.data() as Clinic;
+          upsertMockClinic(clinicData);
           setClinic(clinicData);
           await updateDoc(doc(db, "clinics", userRecord.clinicId), {
             isActive: true,
@@ -169,6 +203,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
           if (userDoc.exists()) {
             const userData = userDoc.data() as User;
             setUser({ ...userData, password: userData.password || "" });
+            await syncClinicsFromFirestore();
+            await syncAppointmentsFromFirestore();
             await setClinicForUser(userData);
             return;
           }
@@ -179,6 +215,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
           );
           if (foundUser) {
             setUser(foundUser);
+            await syncAppointmentsFromFirestore();
             await setClinicForUser(foundUser);
             return;
           }
@@ -223,6 +260,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       if (userDoc.exists()) {
         const userData = userDoc.data() as User;
         setUser(userData);
+        await syncClinicsFromFirestore();
+        await syncAppointmentsFromFirestore();
         await setClinicForUser(userData);
         return { success: true, message: "Login successful" };
       }
@@ -253,6 +292,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
       if (foundUser) {
         setUser(foundUser);
+        await syncAppointmentsFromFirestore();
+        await syncAppointmentsFromFirestore();
         await setClinicForUser(foundUser);
         return { success: true, message: "Login successful (local fallback)" };
       }
@@ -266,6 +307,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     password: string,
     role: "patient" | "clinic" | "admin",
     name?: string,
+    clinicAddress?: string,
   ): Promise<AuthResponse> => {
     if (role === "admin") {
       return { success: false, message: "Admin accounts cannot be registered" };
@@ -273,6 +315,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 
     if (!email.includes("@")) {
       return { success: false, message: "Please enter a valid email address" };
+    }
+
+    if (role === "clinic" && !clinicAddress?.trim()) {
+      return { success: false, message: "Clinic address is required" };
     }
 
     const existingUser = mockUsers.find(
@@ -316,7 +362,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         const clinicData: Clinic = {
           id: userId,
           name: `${userName} Clinic`,
-          address: "",
+          address: clinicAddress?.trim() || "",
           phone: "",
           email: email.trim().toLowerCase(),
           description: "New dental clinic",
@@ -340,11 +386,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         };
 
         await setDoc(doc(db, "clinics", userId), clinicData);
+        upsertMockClinic(clinicData);
       }
 
       setUser(newUser);
       if (role === "clinic") {
-        const newClinic = role === "clinic" ? await getDoc(doc(db, "clinics", userId)) : null;
+        const newClinic =
+          role === "clinic" ? await getDoc(doc(db, "clinics", userId)) : null;
         if (newClinic?.exists()) {
           setClinic(newClinic.data() as Clinic);
         }
@@ -353,7 +401,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       return { success: true, message: "Account created successfully" };
     } catch (error: any) {
       // fallback to local signup if Firebase fails
-      return await localSignup(email, password, role, name);
+      return await localSignup(email, password, role, name, clinicAddress);
     }
   };
 
@@ -368,11 +416,24 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     setClinic(null);
   };
 
+  const refreshClinics = async (): Promise<void> => {
+    await syncClinicsFromFirestore();
+    await syncAppointmentsFromFirestore();
+  };
+
   const isAuthenticated = user !== null;
 
   return (
     <AuthContext.Provider
-      value={{ user, clinic, login, signup, logout, isAuthenticated }}
+      value={{
+        user,
+        clinic,
+        login,
+        signup,
+        logout,
+        refreshClinics,
+        isAuthenticated,
+      }}
     >
       {children}
     </AuthContext.Provider>

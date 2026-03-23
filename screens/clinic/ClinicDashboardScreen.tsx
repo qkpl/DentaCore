@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import React, { useCallback, useState } from "react";
 import {
+    ActivityIndicator,
     ScrollView,
     StyleSheet,
     Text,
@@ -20,18 +21,60 @@ export default function ClinicDashboardScreen({
 }: ClinicDashboardScreenProps) {
   const { clinic } = useAuth();
   const [stats, setStats] = useState<any>(null);
+  const [isLoadingStats, setIsLoadingStats] = useState(true);
 
   useFocusEffect(
     useCallback(() => {
-      if (clinic) {
-        const fetchedStats = getClinicStats(clinic.id);
-        setStats(fetchedStats);
-      }
+      let isActive = true;
+
+      const loadStats = async () => {
+        if (!clinic) {
+          if (isActive) {
+            setStats(null);
+            setIsLoadingStats(false);
+          }
+          return;
+        }
+
+        if (isActive) {
+          setIsLoadingStats(true);
+        }
+
+        try {
+          const fetchedStats = await getClinicStats(clinic.id);
+          if (isActive) {
+            setStats(fetchedStats);
+          }
+        } catch (error) {
+          if (isActive) {
+            setStats(null);
+          }
+        } finally {
+          if (isActive) {
+            setIsLoadingStats(false);
+          }
+        }
+      };
+
+      void loadStats();
+
+      return () => {
+        isActive = false;
+      };
     }, [clinic]),
   );
 
-  if (!clinic || !stats) {
+  if (!clinic) {
     return null;
+  }
+
+  if (isLoadingStats || !stats) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#00BFA6" />
+        <Text style={styles.loadingText}>Loading clinic dashboard...</Text>
+      </View>
+    );
   }
 
   return (
@@ -199,6 +242,17 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F5F5",
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: "#F5F5F5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#666",
+    fontSize: 14,
   },
   header: {
     flexDirection: "row",

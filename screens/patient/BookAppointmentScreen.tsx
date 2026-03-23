@@ -1,12 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     Alert,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Clinic } from "../../data/mockData";
@@ -16,6 +16,63 @@ interface BookAppointmentScreenProps {
   route: any;
   navigation: any;
 }
+
+const jsDayToOperatingDay: Array<keyof Clinic["operatingHours"]> = [
+  "sunday",
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+];
+
+const formatSlot = (hours: number): string => {
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const hour12 = ((hours + 11) % 12) + 1;
+  return `${hour12}:00 ${suffix}`;
+};
+
+const parseTimeToHour = (timeLabel: string): number | null => {
+  const match = timeLabel.trim().match(/^(\d{1,2})(?::\d{2})?\s*(AM|PM)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const rawHour = Number(match[1]);
+  const period = match[2].toUpperCase();
+  if (Number.isNaN(rawHour) || rawHour < 1 || rawHour > 12) {
+    return null;
+  }
+
+  if (period === "AM") {
+    return rawHour === 12 ? 0 : rawHour;
+  }
+
+  return rawHour === 12 ? 12 : rawHour + 12;
+};
+
+const buildTimeSlots = (operatingHours: string): string[] => {
+  const [startRaw, endRaw] = operatingHours
+    .split("-")
+    .map((value) => value.trim());
+  if (!startRaw || !endRaw) {
+    return [];
+  }
+
+  const startHour = parseTimeToHour(startRaw);
+  const endHour = parseTimeToHour(endRaw);
+  if (startHour === null || endHour === null || endHour <= startHour) {
+    return [];
+  }
+
+  const slots: string[] = [];
+  for (let hour = startHour; hour < endHour; hour += 1) {
+    slots.push(formatSlot(hour));
+  }
+
+  return slots;
+};
 
 export default function BookAppointmentScreen({
   route,
@@ -28,22 +85,43 @@ export default function BookAppointmentScreen({
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
 
-  // Mock available dates (next 7 days)
-  const availableDates = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date();
-    date.setDate(date.getDate() + i + 1);
-    return date.toISOString().split("T")[0];
-  });
+  const availableDates = useMemo(() => {
+    const dates: string[] = [];
 
-  // Mock available times
-  const availableTimes = [
-    "9:00 AM",
-    "10:00 AM",
-    "11:00 AM",
-    "2:00 PM",
-    "3:00 PM",
-    "4:00 PM",
-  ];
+    for (let offset = 1; offset <= 14; offset += 1) {
+      const date = new Date();
+      date.setDate(date.getDate() + offset);
+
+      const dayKey = jsDayToOperatingDay[date.getDay()];
+      const schedule = clinic.operatingHours[dayKey];
+      if (schedule !== "Closed") {
+        dates.push(date.toISOString().split("T")[0]);
+      }
+    }
+
+    return dates;
+  }, [clinic.operatingHours]);
+
+  const availableTimes = useMemo(() => {
+    if (!selectedDate) {
+      return [];
+    }
+
+    const dayKey =
+      jsDayToOperatingDay[new Date(`${selectedDate}T00:00:00`).getDay()];
+    const schedule = clinic.operatingHours[dayKey];
+    if (schedule === "Closed") {
+      return [];
+    }
+
+    return buildTimeSlots(schedule);
+  }, [clinic.operatingHours, selectedDate]);
+
+  useEffect(() => {
+    if (selectedTime && !availableTimes.includes(selectedTime)) {
+      setSelectedTime(null);
+    }
+  }, [availableTimes, selectedTime]);
 
   const handleBookAppointment = () => {
     if (!selectedService || !selectedDate || !selectedTime) {
@@ -56,12 +134,12 @@ export default function BookAppointmentScreen({
       return;
     }
 
-    const newAppointment = createAppointment({
+    createAppointment({
       patientId: user.id,
       patientName: user.name,
       clinicId: clinic.id,
       clinicName: clinic.name,
-      dentistName: "Smith",
+      dentistName: "Assigned Dentist",
       date: selectedDate,
       time: selectedTime,
       type: selectedService,
@@ -166,81 +244,103 @@ export default function BookAppointmentScreen({
         {/* Select Date */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Date</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.datesScroll}
-          >
-            {availableDates.map((date, index) => {
-              const formattedDate = formatDate(date);
-              return (
-                <TouchableOpacity
-                  key={index}
-                  style={[
-                    styles.dateCard,
-                    selectedDate === date && styles.dateCardSelected,
-                  ]}
-                  onPress={() => setSelectedDate(date)}
-                >
-                  <Text
+          {availableDates.length === 0 ? (
+            <View style={styles.inlineMessageCard}>
+              <Text style={styles.inlineMessageText}>
+                This clinic has no available appointment days right now.
+              </Text>
+            </View>
+          ) : (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.datesScroll}
+            >
+              {availableDates.map((date, index) => {
+                const formattedDate = formatDate(date);
+                return (
+                  <TouchableOpacity
+                    key={index}
                     style={[
-                      styles.dateDay,
-                      selectedDate === date && styles.dateTextSelected,
+                      styles.dateCard,
+                      selectedDate === date && styles.dateCardSelected,
                     ]}
+                    onPress={() => setSelectedDate(date)}
                   >
-                    {formattedDate.day}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.dateNumber,
-                      selectedDate === date && styles.dateTextSelected,
-                    ]}
-                  >
-                    {formattedDate.date}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.dateMonth,
-                      selectedDate === date && styles.dateTextSelected,
-                    ]}
-                  >
-                    {formattedDate.month}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
+                    <Text
+                      style={[
+                        styles.dateDay,
+                        selectedDate === date && styles.dateTextSelected,
+                      ]}
+                    >
+                      {formattedDate.day}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.dateNumber,
+                        selectedDate === date && styles.dateTextSelected,
+                      ]}
+                    >
+                      {formattedDate.date}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.dateMonth,
+                        selectedDate === date && styles.dateTextSelected,
+                      ]}
+                    >
+                      {formattedDate.month}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
         </View>
 
         {/* Select Time */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Time</Text>
-          <View style={styles.timesGrid}>
-            {availableTimes.map((time, index) => (
-              <TouchableOpacity
-                key={index}
-                style={[
-                  styles.timeCard,
-                  selectedTime === time && styles.timeCardSelected,
-                ]}
-                onPress={() => setSelectedTime(time)}
-              >
-                <Ionicons
-                  name="time"
-                  size={18}
-                  color={selectedTime === time ? "#FFF" : "#666"}
-                />
-                <Text
+          {!selectedDate ? (
+            <View style={styles.inlineMessageCard}>
+              <Text style={styles.inlineMessageText}>
+                Select an available day first.
+              </Text>
+            </View>
+          ) : availableTimes.length === 0 ? (
+            <View style={styles.inlineMessageCard}>
+              <Text style={styles.inlineMessageText}>
+                No available time slots for this day.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.timesGrid}>
+              {availableTimes.map((time, index) => (
+                <TouchableOpacity
+                  key={index}
                   style={[
-                    styles.timeText,
-                    selectedTime === time && styles.timeTextSelected,
+                    styles.timeCard,
+                    selectedTime === time && styles.timeCardSelected,
                   ]}
+                  onPress={() => setSelectedTime(time)}
                 >
-                  {time}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                  <Ionicons
+                    name="time"
+                    size={18}
+                    color={selectedTime === time ? "#FFF" : "#666"}
+                  />
+                  <Text
+                    style={[
+                      styles.timeText,
+                      selectedTime === time && styles.timeTextSelected,
+                    ]}
+                  >
+                    {time}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Summary */}
@@ -348,6 +448,18 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#333",
     marginBottom: 15,
+  },
+  inlineMessageCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+  },
+  inlineMessageText: {
+    color: "#666",
+    fontSize: 14,
   },
   servicesGrid: {
     flexDirection: "row",
