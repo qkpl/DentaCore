@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,10 +13,12 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
-import { Appointment } from "../../data/mockData";
+import { Appointment, ClinicReview } from "../../data/mockData";
 import {
   cancelAppointment,
   getAppointmentsByPatient,
+  getClinicReviewsByPatient,
+  submitClinicReview,
 } from "../../services/dataService";
 import RescheduleAppointmentScreen from "./RescheduleAppointmentScreen";
 
@@ -60,24 +63,47 @@ export default function AppointmentsScreen({
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [reviewsByAppointment, setReviewsByAppointment] = useState<
+    Record<string, ClinicReview>
+  >({});
+  const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [reviewTarget, setReviewTarget] = useState<Appointment | null>(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState("");
+  const [reviewSaving, setReviewSaving] = useState(false);
 
-  const loadAppointments = useCallback(() => {
+  const loadAppointments = useCallback(async () => {
     if (!user) {
       setAppointments([]);
+      setReviewsByAppointment({});
       return;
     }
 
     const patientAppointments = getAppointmentsByPatient(user.id);
     setAppointments(patientAppointments);
+
+    try {
+      const patientReviews = await getClinicReviewsByPatient(user.id);
+      const mappedReviews = patientReviews.reduce<Record<string, ClinicReview>>(
+        (acc, review) => {
+          acc[review.appointmentId] = review;
+          return acc;
+        },
+        {},
+      );
+      setReviewsByAppointment(mappedReviews);
+    } catch (error) {
+      console.warn("Failed to load reviews for patient", error);
+    }
   }, [user]);
 
   useEffect(() => {
-    loadAppointments();
+    void loadAppointments();
   }, [loadAppointments, refreshTrigger]);
 
   useFocusEffect(
     useCallback(() => {
-      loadAppointments();
+      void loadAppointments();
     }, [loadAppointments]),
   );
 
@@ -206,6 +232,91 @@ export default function AppointmentsScreen({
       "Appointment rescheduled. Waiting for clinic confirmation.",
     );
     setTimeout(() => setFeedbackMessage(""), 2400);
+  };
+
+  const getReviewForAppointment = (appointmentId: string) =>
+    reviewsByAppointment[appointmentId];
+
+  const openReviewModal = (appointment: Appointment) => {
+    const existingReview = getReviewForAppointment(appointment.id);
+    setReviewTarget(appointment);
+    setReviewRating(existingReview?.rating ?? 5);
+    setReviewComment(existingReview?.comment ?? "");
+    setReviewModalVisible(true);
+  };
+
+  const closeReviewModal = () => {
+    if (reviewSaving) {
+      return;
+    }
+    setReviewModalVisible(false);
+    setReviewTarget(null);
+    setReviewComment("");
+    setReviewRating(5);
+  };
+
+  const renderStars = (
+    currentValue: number,
+    onSelect?: (value: number) => void,
+  ) =>
+    Array.from({ length: 5 }).map((_, index) => {
+      const starValue = index + 1;
+      const active = currentValue >= starValue;
+      const iconName = active ? "star" : "star-outline";
+      return (
+        <TouchableOpacity
+          key={starValue}
+          style={styles.starButton}
+          activeOpacity={onSelect ? 0.7 : 1}
+          onPress={() => onSelect?.(starValue)}
+        >
+          <Ionicons
+            name={iconName}
+            size={24}
+            color={active ? "#FBBF24" : "#D1D5DB"}
+          />
+        </TouchableOpacity>
+      );
+    });
+
+  const handleSubmitReview = async () => {
+    if (!reviewTarget || !user) {
+      return;
+    }
+    if (reviewRating < 1) {
+      Alert.alert("Rating required", "Please select a star rating first.");
+      return;
+    }
+
+    setReviewSaving(true);
+    try {
+      const savedReview = await submitClinicReview({
+        appointmentId: reviewTarget.id,
+        clinicId: reviewTarget.clinicId,
+        clinicName: reviewTarget.clinicName,
+        patientId: user.id,
+        patientName: user.name,
+        rating: reviewRating,
+        comment: reviewComment.trim(),
+      });
+      setReviewsByAppointment((prev) => ({
+        ...prev,
+        [savedReview.appointmentId]: savedReview,
+      }));
+      setFeedbackMessage("Thanks for reviewing the clinic!");
+      setTimeout(() => setFeedbackMessage(""), 2400);
+      setReviewModalVisible(false);
+      setReviewTarget(null);
+      setReviewComment("");
+      setReviewRating(5);
+    } catch (error) {
+      Alert.alert(
+        "Review failed",
+        "We couldn't save your review. Please try again.",
+      );
+    } finally {
+      setReviewSaving(false);
+    }
   };
 
   const pendingCount = statusSummary.pending ?? 0;
@@ -490,6 +601,80 @@ export default function AppointmentsScreen({
                     );
                   })()}
                 </View>
+
+                {appointment.status === "completed" && (
+                  <View style={styles.reviewBlock}>
+                    {(() => {
+                      const existingReview = getReviewForAppointment(
+                        appointment.id,
+                      );
+                      if (existingReview) {
+                        return (
+                          <View style={styles.reviewSummary}>
+                            <View style={styles.reviewSummaryHeader}>
+                              <View style={styles.reviewStarsRow}>
+                                {renderStars(existingReview.rating)}
+                                <Text style={styles.reviewRatingValue}>
+                                  {existingReview.rating.toFixed(1)}
+                                </Text>
+                              </View>
+                              <TouchableOpacity
+                                style={styles.reviewEditButton}
+                                onPress={() => openReviewModal(appointment)}
+                              >
+                                <Ionicons
+                                  name="create-outline"
+                                  size={16}
+                                  color="#0369A1"
+                                />
+                                <Text style={styles.reviewEditText}>
+                                  Update review
+                                </Text>
+                              </TouchableOpacity>
+                            </View>
+                            {existingReview.comment ? (
+                              <Text style={styles.reviewComment}>
+                                {existingReview.comment}
+                              </Text>
+                            ) : null}
+                            <Text style={styles.reviewTimestamp}>
+                              Posted{" "}
+                              {new Date(
+                                existingReview.createdAt,
+                              ).toLocaleDateString()}
+                            </Text>
+                          </View>
+                        );
+                      }
+
+                      return (
+                        <TouchableOpacity
+                          style={styles.reviewPrompt}
+                          onPress={() => openReviewModal(appointment)}
+                        >
+                          <Ionicons
+                            name="star-outline"
+                            size={18}
+                            color="#FBBF24"
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.reviewPromptTitle}>
+                              Share your experience
+                            </Text>
+                            <Text style={styles.reviewPromptSubtitle}>
+                              Rate this clinic to help other patients.
+                            </Text>
+                          </View>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={18}
+                            color="#9CA3AF"
+                          />
+                        </TouchableOpacity>
+                      );
+                    })()}
+                  </View>
+                )}
               </View>
             );
           })
@@ -503,6 +688,56 @@ export default function AppointmentsScreen({
         onClose={() => setRescheduleModalVisible(false)}
         onSuccess={handleRescheduleSuccess}
       />
+
+      <Modal
+        animationType="slide"
+        transparent
+        visible={reviewModalVisible}
+        onRequestClose={closeReviewModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.reviewModalCard}>
+            <View style={styles.reviewModalHeader}>
+              <Text style={styles.reviewModalTitle}>Clinic review</Text>
+              <TouchableOpacity onPress={closeReviewModal}>
+                <Ionicons name="close" size={22} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.reviewModalSubtitle}>
+              How was your visit with {reviewTarget?.clinicName}?
+            </Text>
+            <View style={styles.starRow}>
+              {renderStars(reviewRating, (value) => setReviewRating(value))}
+            </View>
+            <TextInput
+              style={styles.reviewInput}
+              placeholder="Share any details that stood out (optional)"
+              placeholderTextColor="#94A3B8"
+              multiline
+              value={reviewComment}
+              onChangeText={setReviewComment}
+            />
+            <View style={styles.reviewModalActions}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonGhost]}
+                onPress={closeReviewModal}
+                disabled={reviewSaving}
+              >
+                <Text style={styles.modalButtonGhostText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={handleSubmitReview}
+                disabled={reviewSaving}
+              >
+                <Text style={styles.modalButtonText}>
+                  {reviewSaving ? "Saving…" : "Submit"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -784,6 +1019,71 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
+  reviewBlock: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#F1F5F9",
+    paddingTop: 12,
+  },
+  reviewSummary: {
+    gap: 8,
+  },
+  reviewSummaryHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  reviewStarsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  reviewRatingValue: {
+    marginLeft: 6,
+    fontWeight: "700",
+    fontSize: 14,
+    color: "#0F172A",
+  },
+  reviewEditButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  reviewEditText: {
+    color: "#0369A1",
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  reviewComment: {
+    color: "#475569",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  reviewTimestamp: {
+    fontSize: 11,
+    color: "#94A3B8",
+  },
+  reviewPrompt: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#F5F3FF",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  reviewPromptTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#4338CA",
+  },
+  reviewPromptSubtitle: {
+    fontSize: 12,
+    color: "#6366F1",
+  },
+  starButton: {
+    padding: 4,
+  },
   emptyState: {
     alignItems: "center",
     paddingVertical: 60,
@@ -833,5 +1133,69 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 10,
     fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.35)",
+    justifyContent: "center",
+    padding: 20,
+  },
+  reviewModalCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 18,
+    padding: 20,
+    gap: 14,
+  },
+  reviewModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  reviewModalTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  reviewModalSubtitle: {
+    fontSize: 14,
+    color: "#475569",
+  },
+  starRow: {
+    flexDirection: "row",
+    gap: 4,
+  },
+  reviewInput: {
+    minHeight: 90,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    padding: 12,
+    textAlignVertical: "top",
+    fontSize: 14,
+    color: "#0F172A",
+  },
+  reviewModalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 12,
+  },
+  modalButton: {
+    backgroundColor: "#00BFA6",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  modalButtonText: {
+    color: "#FFF",
+    fontWeight: "700",
+  },
+  modalButtonGhost: {
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  modalButtonGhostText: {
+    color: "#475569",
+    fontWeight: "600",
   },
 });

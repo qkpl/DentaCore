@@ -15,8 +15,10 @@ import {
 import {
   Appointment,
   Clinic,
+  ClinicReview,
   DentalRecord,
   mockAppointments,
+  mockClinicReviews,
   mockClinics,
   mockDentalRecords,
   mockStaffMembers,
@@ -39,6 +41,7 @@ const appointmentsCollection = collection(db, "appointments");
 const patientRecordsCollection = collection(db, "patientRecords");
 const clinicsCollection = collection(db, "clinics");
 const usersCollection = collection(db, "users");
+const clinicReviewsCollection = collection(db, "clinicReviews");
 const LOCAL_RECORDS_KEY = "dentacore/localDentalRecords";
 let localRecordsCache: DentalRecord[] | null = null;
 
@@ -351,6 +354,68 @@ const mapFirestoreUser = (
   };
 };
 
+const mapFirestoreClinicReview = (
+  snapshot: QueryDocumentSnapshot<DocumentData>,
+): ClinicReview => {
+  const data = snapshot.data() as Partial<ClinicReview>;
+  return {
+    id: snapshot.id,
+    appointmentId: safeString(data.appointmentId),
+    clinicId: safeString(data.clinicId),
+    clinicName: safeString(data.clinicName),
+    patientId: safeString(data.patientId),
+    patientName: safeString(data.patientName),
+    rating: safeNumber((data as any)?.rating, 0),
+    comment: safeString(data.comment),
+    createdAt: safeString(data.createdAt) || new Date().toISOString(),
+  };
+};
+
+const getLocalClinicReviewsByPatient = (patientId: string): ClinicReview[] =>
+  mockClinicReviews.filter((review) => review.patientId === patientId);
+
+const getLocalClinicReviewsByClinic = (clinicId: string): ClinicReview[] =>
+  mockClinicReviews.filter((review) => review.clinicId === clinicId);
+
+const getLocalReviewByAppointment = (
+  appointmentId: string,
+): ClinicReview | undefined =>
+  mockClinicReviews.find((review) => review.appointmentId === appointmentId);
+
+const recalcClinicRatingFromReviews = (clinicId: string): void => {
+  const clinic = mockClinics.find((item) => item.id === clinicId);
+  if (!clinic) {
+    return;
+  }
+
+  const reviews = getLocalClinicReviewsByClinic(clinicId);
+  if (reviews.length === 0) {
+    return;
+  }
+
+  const average =
+    reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
+  const roundedAverage = Math.round(average * 10) / 10;
+  clinic.rating = roundedAverage;
+  clinic.totalPatients = Math.max(clinic.totalPatients, reviews.length);
+
+  void updateDoc(doc(db, "clinics", clinicId), {
+    rating: clinic.rating,
+    totalPatients: clinic.totalPatients,
+  }).catch((error) => {
+    console.warn("Failed to refresh clinic rating", error);
+  });
+};
+
+const upsertLocalReview = (review: ClinicReview) => {
+  const index = mockClinicReviews.findIndex((item) => item.id === review.id);
+  if (index === -1) {
+    mockClinicReviews.push(review);
+  } else {
+    mockClinicReviews[index] = review;
+  }
+};
+
 const sortRecordsDesc = (records: DentalRecord[]) =>
   [...records].sort((a, b) => b.date.localeCompare(a.date));
 
@@ -498,6 +563,103 @@ export const filterClinics = (filters: {
   }
 
   return filtered;
+};
+
+export const getClinicReviewByAppointment = (
+  appointmentId: string,
+): ClinicReview | undefined => getLocalReviewByAppointment(appointmentId);
+
+export const getClinicReviewsByClinic = async (
+  clinicId: string,
+): Promise<ClinicReview[]> => {
+  try {
+    const reviewsQuery = query(
+      clinicReviewsCollection,
+      where("clinicId", "==", clinicId),
+    );
+    const snapshot = await getDocs(reviewsQuery);
+    if (snapshot.empty) {
+      return getLocalClinicReviewsByClinic(clinicId);
+    }
+
+    const reviews = snapshot.docs.map(mapFirestoreClinicReview);
+    reviews.forEach(upsertLocalReview);
+    return reviews;
+  } catch (error) {
+    console.warn("Failed to fetch clinic reviews", error);
+    return getLocalClinicReviewsByClinic(clinicId);
+  }
+};
+
+export const getClinicReviewsByPatient = async (
+  patientId: string,
+): Promise<ClinicReview[]> => {
+  try {
+    const reviewsQuery = query(
+      clinicReviewsCollection,
+      where("patientId", "==", patientId),
+    );
+    const snapshot = await getDocs(reviewsQuery);
+    if (snapshot.empty) {
+      return getLocalClinicReviewsByPatient(patientId);
+    }
+
+    const reviews = snapshot.docs.map(mapFirestoreClinicReview);
+    reviews.forEach(upsertLocalReview);
+    return reviews;
+  } catch (error) {
+    console.warn("Failed to fetch patient reviews", error);
+    return getLocalClinicReviewsByPatient(patientId);
+  }
+};
+
+export type SubmitClinicReviewInput = {
+  appointmentId: string;
+  clinicId: string;
+  clinicName: string;
+  patientId: string;
+  patientName: string;
+  rating: number;
+  comment: string;
+};
+
+export const submitClinicReview = async (
+  input: SubmitClinicReviewInput,
+): Promise<ClinicReview> => {
+  const ratingValue = Math.max(1, Math.min(5, input.rating));
+  const existingReview = getLocalReviewByAppointment(input.appointmentId);
+  const timestamp = existingReview?.createdAt ?? new Date().toISOString();
+  const payload = {
+    appointmentId: input.appointmentId,
+    clinicId: input.clinicId,
+    clinicName: input.clinicName,
+    patientId: input.patientId,
+    patientName: input.patientName,
+    rating: ratingValue,
+    comment: input.comment.trim(),
+    createdAt: timestamp,
+  };
+
+  let savedReview: ClinicReview;
+
+  try {
+    if (existingReview) {
+      const reviewDoc = doc(db, "clinicReviews", existingReview.id);
+      await setDoc(reviewDoc, payload, { merge: true });
+      savedReview = { id: existingReview.id, ...payload };
+    } else {
+      const docRef = await addDoc(clinicReviewsCollection, payload);
+      savedReview = { id: docRef.id, ...payload };
+    }
+  } catch (error) {
+    console.warn("Failed to persist review to Firestore", error);
+    const fallbackId = existingReview?.id ?? `review-${Date.now()}`;
+    savedReview = { id: fallbackId, ...payload };
+  }
+
+  upsertLocalReview(savedReview);
+  recalcClinicRatingFromReviews(input.clinicId);
+  return savedReview;
 };
 
 export const updateClinic = async (

@@ -42,6 +42,18 @@ export interface Clinic {
   lastLoginDate?: string; // Track when clinic last logged in
 }
 
+export interface ClinicReview {
+  id: string;
+  appointmentId: string;
+  clinicId: string;
+  clinicName: string;
+  patientId: string;
+  patientName: string;
+  rating: number; // 1-5 stars
+  comment: string;
+  createdAt: string;
+}
+
 export type PaymentMethod = "card" | "gcash" | "paypal";
 export type PaymentStatus = "pending" | "paid" | "refunded" | "failed";
 
@@ -252,6 +264,20 @@ export const mockClinics: Clinic[] = [
     revenue: 28100,
     location: { lat: 40.731, lng: -73.997 },
     isActive: false, // Not yet logged in
+  },
+];
+
+export const mockClinicReviews: ClinicReview[] = [
+  {
+    id: "review-demo-1",
+    appointmentId: "apt-demo-1",
+    clinicId: "clinic1",
+    clinicName: "SmileCare Dental",
+    patientId: "patient1",
+    patientName: "Demo User",
+    rating: 5,
+    comment: "Friendly staff and quick service!",
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
   },
 ];
 
