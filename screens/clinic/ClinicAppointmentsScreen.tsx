@@ -1,23 +1,24 @@
 import { Ionicons } from "@expo/vector-icons";
 import { collection, getDocs, query, where } from "firebase/firestore";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Image,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Appointment, StaffMember } from "../../data/mockData";
 import {
-    assignDentistToAppointment,
-    getAppointmentsByClinic,
-    getStaffByClinic,
-    updateAppointmentStatus,
+  assignDentistToAppointment,
+  getAppointmentsByClinic,
+  getStaffByClinic,
+  updateAppointmentStatus,
 } from "../../services/dataService";
 import { db } from "../../services/firebase";
 
@@ -39,6 +40,7 @@ export default function ClinicAppointmentsScreen({
   const [appointmentToAssign, setAppointmentToAssign] =
     useState<Appointment | null>(null);
   const [customDentistName, setCustomDentistName] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!clinic) {
@@ -107,6 +109,14 @@ export default function ClinicAppointmentsScreen({
   }
 
   const openAssignModal = (appointment: Appointment) => {
+    if (!canModifyDentist(appointment.status)) {
+      Alert.alert(
+        "Locked",
+        "Dentist changes aren't allowed once an appointment is completed.",
+      );
+      return;
+    }
+
     setAppointmentToAssign(appointment);
     setAssignModalVisible(true);
   };
@@ -119,6 +129,15 @@ export default function ClinicAppointmentsScreen({
 
   const handleDentistSelection = (dentist: StaffMember) => {
     if (!appointmentToAssign) {
+      return;
+    }
+
+    if (!canModifyDentist(appointmentToAssign.status)) {
+      Alert.alert(
+        "Action not allowed",
+        "This appointment can no longer be modified.",
+      );
+      closeAssignModal();
       return;
     }
 
@@ -141,6 +160,15 @@ export default function ClinicAppointmentsScreen({
 
   const handleManualDentistAssign = () => {
     if (!appointmentToAssign) {
+      return;
+    }
+
+    if (!canModifyDentist(appointmentToAssign.status)) {
+      Alert.alert(
+        "Action not allowed",
+        "This appointment can no longer be modified.",
+      );
+      closeAssignModal();
       return;
     }
 
@@ -167,6 +195,27 @@ export default function ClinicAppointmentsScreen({
     }
   };
 
+  const handleViewDetails = (appointment: Appointment) => {
+    const actions: Array<{
+      text: string;
+      onPress?: () => void;
+      style?: "cancel";
+    }> = [{ text: "Close", style: "cancel" }];
+
+    if (canModifyDentist(appointment.status)) {
+      actions.push({
+        text: "Assign Dentist",
+        onPress: () => openAssignModal(appointment),
+      });
+    }
+
+    Alert.alert(
+      appointment.patientName,
+      `${appointment.type}\n${appointment.date} · ${appointment.time}\n${formatDentistName(appointment.dentistName)}`,
+      actions,
+    );
+  };
+
   const formatDentistName = (name?: string) => {
     if (!name || !name.trim()) {
       return "Dentist not assigned";
@@ -176,37 +225,121 @@ export default function ClinicAppointmentsScreen({
     return trimmed.toLowerCase().startsWith("dr.") ? trimmed : `Dr. ${trimmed}`;
   };
 
-  const filteredAppointments = appointments.filter((apt) =>
-    selectedFilter === "all" ? true : apt.status === selectedFilter,
-  );
+  const filteredAppointments = appointments.filter((apt) => {
+    const matchesFilter =
+      selectedFilter === "all" ? true : apt.status === selectedFilter;
+    const searchableText =
+      `${apt.patientName} ${apt.type} ${apt.dentistName ?? ""}`.toLowerCase();
+    const matchesSearch = searchableText.includes(
+      searchQuery.trim().toLowerCase(),
+    );
+    return matchesFilter && matchesSearch;
+  });
 
-  const statusTabs: Array<{
-    key: typeof selectedFilter;
-    label: string;
-    count: number;
-  }> = [
-    { key: "all", label: "All", count: appointments.length },
+  const canModifyDentist = (status: Appointment["status"]) =>
+    status === "pending" || status === "confirmed";
+
+  const statusMeta: Record<
+    typeof selectedFilter,
     {
-      key: "pending",
+      label: string;
+      icon: keyof typeof Ionicons.glyphMap;
+      color: string;
+      background: string;
+    }
+  > = {
+    all: {
+      label: "All",
+      icon: "apps-outline",
+      color: "#007F6D",
+      background: "#E6F8F4",
+    },
+    pending: {
       label: "Pending",
-      count: appointments.filter((a) => a.status === "pending").length,
+      icon: "time-outline",
+      color: "#F9A825",
+      background: "#FFF7E0",
     },
-    {
-      key: "confirmed",
+    confirmed: {
       label: "Confirmed",
-      count: appointments.filter((a) => a.status === "confirmed").length,
+      icon: "checkmark-circle-outline",
+      color: "#2E7D32",
+      background: "#E5F7EA",
     },
-    {
-      key: "completed",
+    completed: {
       label: "Completed",
-      count: appointments.filter((a) => a.status === "completed").length,
+      icon: "ribbon-outline",
+      color: "#2E7D32",
+      background: "#E5F7EA",
     },
-    {
-      key: "cancelled",
+    cancelled: {
       label: "Rejected",
-      count: appointments.filter((a) => a.status === "cancelled").length,
+      icon: "close-circle-outline",
+      color: "#E53935",
+      background: "#FFE8E8",
     },
-  ];
+  };
+
+  const statusTabSummary = (
+    Object.keys(statusMeta) as Array<typeof selectedFilter>
+  ).map((key) => ({
+    key,
+    label: statusMeta[key].label,
+    count: appointments.filter((a) => (key === "all" ? true : a.status === key))
+      .length,
+  }));
+
+  const pendingCount = appointments.filter(
+    (a) => a.status === "pending",
+  ).length;
+
+  const renderStatusTabs = () => (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.statusTabs}
+    >
+      {statusTabSummary.map((tabItem) => {
+        const isActive = selectedFilter === tabItem.key;
+        const meta = statusMeta[tabItem.key];
+        return (
+          <TouchableOpacity
+            key={tabItem.key}
+            style={[
+              styles.statusChip,
+              isActive && [
+                styles.statusChipActive,
+                { backgroundColor: meta.background },
+              ],
+            ]}
+            onPress={() => setSelectedFilter(tabItem.key)}
+          >
+            <View style={styles.statusChipTopRow}>
+              <Ionicons
+                name={meta.icon}
+                size={16}
+                color={isActive ? meta.color : "#7A7A7A"}
+              />
+              {tabItem.key === "pending" && pendingCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{pendingCount}</Text>
+                </View>
+              )}
+            </View>
+            <Text
+              style={[
+                styles.statusChipLabel,
+                isActive && { color: meta.color },
+              ]}
+            >
+              {tabItem.label}
+            </Text>
+            <Text style={styles.statusChipCount}>{tabItem.count}</Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
 
   const handleUpdateStatus = async (
     appointmentId: string,
@@ -239,13 +372,13 @@ export default function ClinicAppointmentsScreen({
   const getStatusColor = (status: Appointment["status"]) => {
     switch (status) {
       case "confirmed":
-        return "#4CAF50";
+        return "#2E7D32";
       case "pending":
-        return "#FFB300";
+        return "#F9A825";
       case "completed":
-        return "#666";
+        return "#2E7D32";
       case "cancelled":
-        return "#F44336";
+        return "#E53935";
       default:
         return "#999";
     }
@@ -253,55 +386,69 @@ export default function ClinicAppointmentsScreen({
 
   return (
     <View style={styles.container}>
-      {/* Navigation Bar */}
-      <View style={styles.navBar}>
+      <View style={styles.header}>
         <TouchableOpacity
-          style={styles.dashboardButton}
+          style={styles.homeButton}
           onPress={() => navigation.navigate("Dashboard")}
         >
-          <Ionicons name="grid-outline" size={24} color="#00BFA6" />
+          <Ionicons name="home-outline" size={24} color="#00BFA6" />
         </TouchableOpacity>
-        <Text style={styles.navTitle}>Appointments</Text>
-        <View style={styles.placeholder} />
+        <View style={styles.headerContent}>
+          <Text style={styles.navTitle}>Clinic Appointments</Text>
+          <Text style={styles.headerSubtitle}>
+            Manage your incoming patient visits
+          </Text>
+        </View>
+        <TouchableOpacity
+          style={styles.notificationContainer}
+          onPress={() => setSelectedFilter("pending")}
+        >
+          <Ionicons name="notifications-outline" size={24} color="#6B7280" />
+          {pendingCount > 0 && (
+            <View style={styles.notificationBadge}>
+              <Text style={styles.notificationBadgeText}>{pendingCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Appointments</Text>
-        <Text style={styles.headerSubtitle}>
-          Review patient appointment requests
-        </Text>
-      </View>
+      <View style={styles.topBlock}>
+        {renderStatusTabs()}
 
-      {/* Filter Tabs */}
-      <View style={styles.tabsContainer}>
-        <View style={styles.tabsContent}>
-          {statusTabs.map((tabItem) => {
-            const isActive = selectedFilter === tabItem.key;
-            return (
+        <View style={styles.searchContainer}>
+          <View style={styles.searchBar}>
+            <Ionicons name="search-outline" size={18} color="#9CA3AF" />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search patient, service or dentist"
+              placeholderTextColor="#9CA3AF"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery.length > 0 && (
               <TouchableOpacity
-                key={tabItem.key}
-                style={[styles.tab, isActive && styles.tabActive]}
-                onPress={() => setSelectedFilter(tabItem.key)}
+                onPress={() => setSearchQuery("")}
+                accessibilityRole="button"
               >
-                <Text
-                  style={[styles.tabLabel, isActive && styles.tabLabelActive]}
-                >
-                  {tabItem.label}
-                </Text>
-                <Text
-                  style={[styles.tabCount, isActive && styles.tabCountActive]}
-                >
-                  {tabItem.count}
-                </Text>
+                <Ionicons name="close-circle" size={18} color="#B0B0B0" />
               </TouchableOpacity>
-            );
-          })}
+            )}
+          </View>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setSelectedFilter("pending")}
+          >
+            <Ionicons name="funnel-outline" size={18} color="#00BFA6" />
+            <Text style={styles.filterText}>Filters</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
-      {/* Appointments List */}
-      <ScrollView style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
         {filteredAppointments.length === 0 ? (
           <View style={styles.emptyState}>
             <Ionicons name="calendar-outline" size={60} color="#CCC" />
@@ -312,23 +459,22 @@ export default function ClinicAppointmentsScreen({
             const hasDentistAssigned =
               typeof appointment.dentistName === "string" &&
               appointment.dentistName.trim().length > 0;
+            const avatarUri = `https://ui-avatars.com/api/?name=${encodeURIComponent(appointment.patientName)}&background=00bfa6&color=fff`;
 
             return (
               <View key={appointment.id} style={styles.appointmentCard}>
-                <View style={styles.appointmentHeader}>
+                <View style={styles.cardTopRow}>
                   <View style={styles.patientInfo}>
-                    <View style={styles.patientAvatar}>
-                      <Text style={styles.avatarText}>
-                        {appointment.patientName
-                          .split(" ")
-                          .map((n) => n[0])
-                          .join("")}
-                      </Text>
-                    </View>
+                    <Image
+                      source={{ uri: avatarUri }}
+                      style={styles.patientAvatarImage}
+                    />
                     <View style={styles.patientDetails}>
-                      <Text style={styles.patientName}>
-                        {appointment.patientName}
-                      </Text>
+                      <View style={styles.patientNameRow}>
+                        <Text style={styles.patientName}>
+                          {appointment.patientName}
+                        </Text>
+                      </View>
                       <Text style={styles.appointmentType}>
                         {appointment.type}
                       </Text>
@@ -337,35 +483,53 @@ export default function ClinicAppointmentsScreen({
                   <View
                     style={[
                       styles.statusBadge,
-                      { backgroundColor: getStatusColor(appointment.status) },
+                      {
+                        backgroundColor: `${getStatusColor(appointment.status)}20`,
+                      },
                     ]}
                   >
-                    <Text style={styles.statusText}>
+                    <Ionicons
+                      name="ellipse"
+                      size={8}
+                      color={getStatusColor(appointment.status)}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[
+                        styles.statusText,
+                        { color: getStatusColor(appointment.status) },
+                      ]}
+                    >
                       {appointment.status.charAt(0).toUpperCase() +
                         appointment.status.slice(1)}
                     </Text>
                   </View>
                 </View>
 
-                <View style={styles.appointmentDetails}>
-                  <View style={styles.detailRow}>
-                    <Ionicons name="person" size={16} color="#666" />
-                    <Text style={styles.detailText}>
+                <View style={styles.metaRow}>
+                  <View style={styles.metaChip}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color="#4A4A4A"
+                    />
+                    <Text style={styles.metaChipText}>{appointment.date}</Text>
+                  </View>
+                  <View style={styles.metaChip}>
+                    <Ionicons name="time-outline" size={16} color="#4A4A4A" />
+                    <Text style={styles.metaChipText}>{appointment.time}</Text>
+                  </View>
+                </View>
+                <View style={styles.metaRow}>
+                  <View style={[styles.metaChip, styles.metaChipFull]}>
+                    <Ionicons name="person-outline" size={16} color="#4A4A4A" />
+                    <Text style={styles.metaChipText}>
                       {formatDentistName(appointment.dentistName)}
                     </Text>
                   </View>
-                  <View style={styles.detailRow}>
-                    <Ionicons name="calendar" size={16} color="#666" />
-                    <Text style={styles.detailText}>{appointment.date}</Text>
-                  </View>
-                  <View style={styles.detailRow}>
-                    <Ionicons name="time" size={16} color="#666" />
-                    <Text style={styles.detailText}>{appointment.time}</Text>
-                  </View>
                 </View>
 
-                {(appointment.status === "pending" ||
-                  appointment.status === "confirmed") && (
+                {canModifyDentist(appointment.status) && (
                   <View style={styles.assignRow}>
                     <View style={styles.assignTextGroup}>
                       <Text style={styles.assignLabel}>
@@ -442,6 +606,14 @@ export default function ClinicAppointmentsScreen({
                     </TouchableOpacity>
                   </View>
                 )}
+
+                <TouchableOpacity
+                  style={styles.viewDetailsButton}
+                  onPress={() => handleViewDetails(appointment)}
+                >
+                  <Text style={styles.viewDetailsText}>View Details</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#007F6D" />
+                </TouchableOpacity>
               </View>
             );
           })
@@ -520,134 +692,190 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F5F5F5",
   },
-  navBar: {
+  header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
     paddingTop: 50,
-    paddingBottom: 10,
+    paddingBottom: 15,
     backgroundColor: "#FFF",
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F0",
   },
-  dashboardButton: {
+  homeButton: {
     padding: 5,
   },
+  headerContent: {
+    flex: 1,
+    alignItems: "center",
+  },
   navTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#333",
-  },
-  placeholder: {
-    width: 34,
-  },
-  header: {
-    backgroundColor: "#FFF",
-    paddingHorizontal: 20,
-    paddingTop: 15,
-    paddingBottom: 20,
-  },
-  headerTitle: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: "bold",
     color: "#333",
-    marginBottom: 5,
   },
   headerSubtitle: {
     fontSize: 14,
     color: "#666",
   },
-  tabsContainer: {
-    backgroundColor: "#FFF",
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
+  notificationContainer: {
+    width: 34,
+    alignItems: "flex-end",
+    justifyContent: "center",
   },
-  tabsContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 20,
-    flexDirection: "column",
-    rowGap: 8,
-  },
-  tab: {
-    width: "84%",
-    alignSelf: "center",
-    height: 55,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 14,
-    backgroundColor: "#F5F5F5",
-    justifyContent: "space-between",
+  notificationBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    backgroundColor: "#FF1744",
+    minWidth: 16,
+    borderRadius: 8,
     alignItems: "center",
+    paddingHorizontal: 4,
+  },
+  notificationBadgeText: {
+    color: "#FFF",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  topBlock: {
+    backgroundColor: "#FFF",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+    gap: 10,
+  },
+  statusTabs: {
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  statusChip: {
+    width: 88,
+    height: 88,
+    padding: 10,
+    borderRadius: 16,
+    marginRight: 10,
+    backgroundColor: "#F6F8FA",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  statusChipActive: {
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.08,
     shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   },
-  tabActive: {
-    backgroundColor: "#00BFA6",
+  statusChipTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    width: "100%",
   },
-  tabLabel: {
+  statusChipLabel: {
+    marginTop: 4,
     fontSize: 12,
     fontWeight: "600",
-    color: "#555",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
+    color: "#6B7280",
   },
-  tabLabelActive: {
-    color: "#E3FFF9",
+  statusChipCount: {
+    fontSize: 11,
+    color: "#9CA3AF",
   },
-  tabCount: {
-    fontSize: 24,
+  badge: {
+    minWidth: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: "#FF1744",
+    alignItems: "center",
+  },
+  badgeText: {
+    fontSize: 10,
     fontWeight: "700",
-    color: "#222",
-  },
-  tabCountActive: {
     color: "#FFF",
+  },
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 0,
+    gap: 10,
+  },
+  searchBar: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 10,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: "#1F2937",
+  },
+  filterButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#00BFA6",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 6,
+  },
+  filterText: {
+    color: "#00BFA6",
+    fontWeight: "600",
+    fontSize: 13,
   },
   content: {
     flex: 1,
-    padding: 20,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  scrollContent: {
+    paddingBottom: 32,
   },
   appointmentCard: {
     backgroundColor: "#FFF",
-    borderRadius: 12,
+    borderRadius: 14,
     padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    marginBottom: 14,
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
     elevation: 3,
   },
-  appointmentHeader: {
+  cardTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
+    alignItems: "center",
+    marginBottom: 10,
   },
   patientInfo: {
     flexDirection: "row",
     alignItems: "center",
     flex: 1,
   },
-  patientAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#00BFA6",
-    justifyContent: "center",
-    alignItems: "center",
+  patientAvatarImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
     marginRight: 12,
-  },
-  avatarText: {
-    color: "#FFF",
-    fontSize: 18,
-    fontWeight: "bold",
   },
   patientDetails: {
     flex: 1,
+  },
+  patientNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
   },
   patientName: {
     fontSize: 16,
@@ -660,27 +888,37 @@ const styles = StyleSheet.create({
     color: "#666",
   },
   statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
+    paddingVertical: 4,
+    borderRadius: 999,
   },
   statusText: {
     fontSize: 12,
-    fontWeight: "600",
-    color: "#FFF",
+    fontWeight: "700",
   },
-  appointmentDetails: {
-    marginBottom: 12,
-  },
-  detailRow: {
+  metaRow: {
     flexDirection: "row",
-    alignItems: "center",
+    gap: 10,
     marginBottom: 8,
   },
-  detailText: {
-    fontSize: 14,
-    color: "#666",
-    marginLeft: 8,
+  metaChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F4F6F8",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flex: 1,
+    gap: 6,
+  },
+  metaChipFull: {
+    flex: 1,
+  },
+  metaChipText: {
+    fontSize: 13,
+    color: "#444",
   },
   assignRow: {
     flexDirection: "row",
@@ -756,6 +994,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     marginLeft: 6,
+  },
+  viewDetailsButton: {
+    marginTop: 10,
+    paddingVertical: 10,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 4,
+  },
+  viewDetailsText: {
+    color: "#007F6D",
+    fontWeight: "700",
   },
   emptyState: {
     alignItems: "center",
