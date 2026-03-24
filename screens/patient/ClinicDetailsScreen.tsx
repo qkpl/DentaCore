@@ -1,13 +1,20 @@
 import { Ionicons } from "@expo/vector-icons";
-import React from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+    ActivityIndicator,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import { Clinic } from "../../data/mockData";
+import {
+    getClinicById,
+    refreshClinicsFromFirestore,
+} from "../../services/dataService";
 
 interface ClinicDetailsScreenProps {
   route: any;
@@ -18,11 +25,124 @@ export default function ClinicDetailsScreen({
   route,
   navigation,
 }: ClinicDetailsScreenProps) {
-  const { clinic }: { clinic: Clinic } = route.params;
+  const navigationClinic: Clinic | undefined = route?.params?.clinic;
+  const [clinic, setClinic] = useState<Clinic | null>(navigationClinic ?? null);
+  const [syncingPin, setSyncingPin] = useState(false);
+  const clinicId = navigationClinic?.id ?? clinic?.id;
+
+  useEffect(() => {
+    if (navigationClinic) {
+      setClinic(navigationClinic);
+    }
+  }, [navigationClinic]);
+
+  const syncLatestClinic = useCallback(async () => {
+    if (!clinicId) {
+      return;
+    }
+    setSyncingPin(true);
+    try {
+      await refreshClinicsFromFirestore();
+      const refreshed = getClinicById(clinicId);
+      if (refreshed) {
+        setClinic(refreshed);
+      }
+    } catch (error) {
+      const fallback = getClinicById(clinicId);
+      if (fallback) {
+        setClinic(fallback);
+      }
+    } finally {
+      setSyncingPin(false);
+    }
+  }, [clinicId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!clinicId) {
+        return;
+      }
+      void syncLatestClinic();
+    }, [clinicId, syncLatestClinic]),
+  );
+
+  const contactItems = useMemo(
+    () => [
+      {
+        key: "address",
+        label: "Address",
+        value: clinic?.address,
+        icon: "location" as const,
+        color: "#1976D2",
+      },
+      {
+        key: "phone",
+        label: "Phone",
+        value: clinic?.phone,
+        icon: "call" as const,
+        color: "#388E3C",
+      },
+      {
+        key: "email",
+        label: "Email",
+        value: clinic?.email,
+        icon: "mail" as const,
+        color: "#F57C00",
+      },
+    ],
+    [clinic?.address, clinic?.email, clinic?.phone],
+  );
+
+  const hasCoords = useMemo(
+    () =>
+      Number.isFinite(clinic?.location?.lat) &&
+      Number.isFinite(clinic?.location?.lng),
+    [clinic?.location?.lat, clinic?.location?.lng],
+  );
+
+  const mapRegion: Region = useMemo(
+    () =>
+      hasCoords
+        ? {
+            latitude: clinic!.location!.lat,
+            longitude: clinic!.location!.lng,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }
+        : {
+            latitude: 14.5995,
+            longitude: 120.9842,
+            latitudeDelta: 0.5,
+            longitudeDelta: 0.5,
+          },
+    [clinic?.location, hasCoords],
+  );
 
   const handleBookAppointment = () => {
+    if (!clinic) {
+      return;
+    }
     navigation.navigate("BookAppointment", { clinic });
   };
+
+  if (!clinic) {
+    return (
+      <View style={[styles.container, styles.centeredState]}>
+        <Ionicons name="business" size={40} color="#9CA3AF" />
+        <Text style={styles.emptyTitle}>Clinic unavailable</Text>
+        <Text style={styles.emptySubtitle}>
+          We couldn’t load this clinic’s details. Please go back and try again.
+        </Text>
+        <TouchableOpacity
+          style={[styles.bookButton, styles.tryAgainButton]}
+          onPress={() => navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={18} color="#FFF" />
+          <Text style={styles.bookButtonText}>Return to list</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container}>
@@ -53,39 +173,77 @@ export default function ClinicDetailsScreen({
         </View>
       </View>
 
+      {/* Map Location */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Map Location</Text>
+        <View style={styles.mapContainer}>
+          {syncingPin && (
+            <View style={styles.mapSyncBadge}>
+              <ActivityIndicator size="small" color="#00BFA6" />
+              <Text style={styles.mapSyncText}>Syncing latest pin…</Text>
+            </View>
+          )}
+          <MapView
+            style={StyleSheet.absoluteFill}
+            provider={PROVIDER_GOOGLE}
+            region={mapRegion}
+            scrollEnabled={false}
+            zoomEnabled={false}
+            rotateEnabled={false}
+            pitchEnabled={false}
+          >
+            {hasCoords ? (
+              <Marker
+                coordinate={{
+                  latitude: clinic.location!.lat,
+                  longitude: clinic.location!.lng,
+                }}
+                title={clinic.name}
+                description={clinic.address}
+              />
+            ) : null}
+          </MapView>
+
+          {!hasCoords && (
+            <View style={styles.mapFallback}>
+              <Ionicons name="pin" size={28} color="#6B7280" />
+              <Text style={styles.mapFallbackTitle}>No pin yet</Text>
+              <Text style={styles.mapFallbackText}>
+                Ask the clinic to pin their exact location to help patients find
+                them easily.
+              </Text>
+            </View>
+          )}
+
+          <View style={styles.mapBadge}>
+            <Text style={styles.mapBadgeTitle}>{clinic.name}</Text>
+            <Text style={styles.mapBadgeSubtitle} numberOfLines={1}>
+              {clinic.address}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.mapHint}>
+          Pinned by clinic team · Used for patient map search
+        </Text>
+      </View>
+
       {/* Contact Information */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Contact Information</Text>
 
-        <View style={styles.infoRow}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="location" size={20} color="#1976D2" />
+        {contactItems.map((item) => (
+          <View key={item.key} style={styles.infoRow}>
+            <View style={styles.iconCircle}>
+              <Ionicons name={item.icon} size={20} color={item.color} />
+            </View>
+            <View style={styles.infoContent}>
+              <Text style={styles.infoLabel}>{item.label}</Text>
+              <Text style={item.value ? styles.infoText : styles.infoTextMuted}>
+                {item.value || "Not provided"}
+              </Text>
+            </View>
           </View>
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Address</Text>
-            <Text style={styles.infoText}>{clinic.address}</Text>
-          </View>
-        </View>
-
-        <View style={styles.infoRow}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="call" size={20} color="#388E3C" />
-          </View>
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Phone</Text>
-            <Text style={styles.infoText}>{clinic.phone}</Text>
-          </View>
-        </View>
-
-        <View style={styles.infoRow}>
-          <View style={styles.iconCircle}>
-            <Ionicons name="mail" size={20} color="#F57C00" />
-          </View>
-          <View style={styles.infoContent}>
-            <Text style={styles.infoLabel}>Email</Text>
-            <Text style={styles.infoText}>{clinic.email}</Text>
-          </View>
-        </View>
+        ))}
       </View>
 
       {/* About */}
@@ -98,7 +256,7 @@ export default function ClinicDetailsScreen({
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Services Offered</Text>
         <View style={styles.servicesContainer}>
-          {clinic.servicesOffered.map((service, index) => (
+          {(clinic.servicesOffered ?? []).map((service, index) => (
             <View key={index} style={styles.serviceChip}>
               <Ionicons name="checkmark-circle" size={16} color="#00BFA6" />
               <Text style={styles.serviceText}>{service}</Text>
@@ -110,7 +268,7 @@ export default function ClinicDetailsScreen({
       {/* Operating Hours */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Operating Hours</Text>
-        {Object.entries(clinic.operatingHours).map(([day, hours]) => (
+        {Object.entries(clinic.operatingHours ?? {}).map(([day, hours]) => (
           <View key={day} style={styles.hourRow}>
             <Text style={styles.dayText}>
               {day.charAt(0).toUpperCase() + day.slice(1)}
@@ -145,6 +303,29 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F5F5",
+  },
+  centeredState: {
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+    gap: 12,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+    marginTop: 8,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  tryAgainButton: {
+    marginTop: 12,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
   },
   header: {
     flexDirection: "row",
@@ -249,10 +430,89 @@ const styles = StyleSheet.create({
     color: "#333",
     fontWeight: "500",
   },
+  infoTextMuted: {
+    fontSize: 15,
+    color: "#9CA3AF",
+  },
   description: {
     fontSize: 15,
     color: "#666",
     lineHeight: 22,
+  },
+  mapContainer: {
+    height: 220,
+    borderRadius: 12,
+    overflow: "hidden",
+    backgroundColor: "#E5E7EB",
+  },
+  mapSyncBadge: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    zIndex: 2,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  mapSyncText: {
+    fontSize: 12,
+    color: "#036666",
+    fontWeight: "600",
+  },
+  mapBadge: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    right: 12,
+    backgroundColor: "#FFF",
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  mapBadgeTitle: {
+    fontWeight: "700",
+    fontSize: 14,
+    color: "#111827",
+  },
+  mapBadgeSubtitle: {
+    fontSize: 12,
+    color: "#4B5563",
+    marginTop: 2,
+  },
+  mapFallback: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: "rgba(255,255,255,0.8)",
+  },
+  mapFallbackTitle: {
+    fontWeight: "700",
+    color: "#111827",
+  },
+  mapFallbackText: {
+    color: "#4B5563",
+    paddingHorizontal: 20,
+    textAlign: "center",
+  },
+  mapHint: {
+    marginTop: 8,
+    color: "#6B7280",
+    fontSize: 12,
   },
   servicesContainer: {
     flexDirection: "row",

@@ -90,7 +90,7 @@ export default function AdminClinicsScreen({
     setEditModalVisible(true);
   };
 
-  const handleSaveClinic = () => {
+  const handleSaveClinic = async () => {
     if (!selectedClinic) return;
 
     if (
@@ -103,7 +103,7 @@ export default function AdminClinicsScreen({
       return;
     }
 
-    const success = updateClinic(selectedClinic.id, {
+    const success = await updateClinic(selectedClinic.id, {
       name: clinicName,
       address: clinicAddress,
       phone: clinicPhone,

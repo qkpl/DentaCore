@@ -25,6 +25,41 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
+### Google Maps & Places setup
+
+To enable the clinic address picker and map pinning powered by Google, supply a Maps Platform API key with the **Maps SDK (iOS/Android)**, **Places API**, and **Geocoding API** enabled.
+
+1. Create an `.env` file (or add to your existing one) in the project root and add:
+
+   ```bash
+   EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=YOUR_ACTUAL_API_KEY
+   ```
+
+   Expo automatically exposes variables prefixed with `EXPO_PUBLIC_` to the app at runtime.
+
+2. Update `app.json` so native Google Maps SDKs can render maps:
+
+   ```jsonc
+   {
+     "expo": {
+       "ios": {
+         "config": {
+           "googleMapsApiKey": "YOUR_ACTUAL_API_KEY",
+         },
+       },
+       "android": {
+         "config": {
+           "googleMaps": { "apiKey": "YOUR_ACTUAL_API_KEY" },
+         },
+       },
+     },
+   }
+   ```
+
+3. Restart Expo (`npx expo start --clear`) after changing the key so the JavaScript bundle and native config both pick up the new value.
+
+With the key in place, clinic users can search Google Maps for their address, pick a suggestion, and have the coordinates pinned automatically.
+
 ## Get a fresh project
 
 When you're ready, run:

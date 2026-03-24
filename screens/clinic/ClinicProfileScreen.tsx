@@ -1,21 +1,43 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import Constants from "expo-constants";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { useAuth } from "../../context/AuthContext";
-import { updateClinic } from "../../services/dataService";
+import {
+  refreshClinicsFromFirestore,
+  updateClinic,
+} from "../../services/dataService";
 
 interface ClinicProfileScreenProps {
   navigation: any;
 }
+
+type GeocodeStatus = "idle" | "loading" | "success" | "error";
+
+type PlacesAutocompleteData = {
+  description?: string;
+};
+
+type PlacesAutocompleteDetails = {
+  formatted_address?: string;
+  geometry?: {
+    location?: {
+      lat?: number;
+      lng?: number;
+    };
+  };
+};
 
 export default function ClinicProfileScreen({
   navigation,
@@ -24,6 +46,7 @@ export default function ClinicProfileScreen({
   const [isEditing, setIsEditing] = useState(false);
   const [showServicesModal, setShowServicesModal] = useState(false);
   const [showHoursModal, setShowHoursModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Form fields
   const [clinicName, setClinicName] = useState("");
@@ -34,6 +57,82 @@ export default function ClinicProfileScreen({
   const [services, setServices] = useState<string[]>([]);
   const [operatingHours, setOperatingHours] = useState<any>({});
   const [newService, setNewService] = useState("");
+  const [locationCoords, setLocationCoords] = useState({
+    lat: 14.5995,
+    lng: 120.9842,
+  });
+  const [geocodeStatus, setGeocodeStatus] = useState<GeocodeStatus>("idle");
+  const [geocodeMessage, setGeocodeMessage] = useState("");
+  const [lastPinnedAddress, setLastPinnedAddress] = useState("");
+
+  const googleMapsApiKey = useMemo(() => {
+    const envKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+    const configKey =
+      Constants.expoConfig?.extra?.googleMapsApiKey ??
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (Constants as any)?.manifest?.extra?.googleMapsApiKey;
+    return envKey ?? configKey ?? "";
+  }, []);
+
+  const supportsGooglePlaces = googleMapsApiKey.length > 0;
+
+  const geocodeAddressWithGoogle = useCallback(
+    async (targetAddress: string) => {
+      if (!supportsGooglePlaces || !targetAddress) {
+        return null;
+      }
+
+      try {
+        const response = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(targetAddress)}&key=${googleMapsApiKey}`,
+        );
+        const json = await response.json();
+        if (
+          json.status === "OK" &&
+          Array.isArray(json.results) &&
+          json.results.length > 0
+        ) {
+          const { lat, lng } = json.results[0].geometry.location;
+          return { lat, lng };
+        }
+      } catch (error) {
+        console.warn("Failed to geocode with Google Maps", error);
+      }
+
+      return null;
+    },
+    [googleMapsApiKey, supportsGooglePlaces],
+  );
+
+  const syncCoordsForAddress = useCallback(
+    async (targetAddress: string) => {
+      if (!targetAddress) {
+        return false;
+      }
+
+      if (
+        lastPinnedAddress &&
+        lastPinnedAddress !== "__manual__" &&
+        targetAddress.localeCompare(lastPinnedAddress, undefined, {
+          sensitivity: "accent",
+        }) === 0
+      ) {
+        return true;
+      }
+
+      const coords = await geocodeAddressWithGoogle(targetAddress);
+      if (!coords) {
+        return false;
+      }
+
+      setLocationCoords(coords);
+      setLastPinnedAddress(targetAddress);
+      setGeocodeStatus("success");
+      setGeocodeMessage("Address pinned using Google Maps.");
+      return true;
+    },
+    [geocodeAddressWithGoogle, lastPinnedAddress],
+  );
 
   useEffect(() => {
     if (clinic) {
@@ -44,44 +143,91 @@ export default function ClinicProfileScreen({
       setDescription(clinic.description);
       setServices([...clinic.servicesOffered]);
       setOperatingHours({ ...clinic.operatingHours });
+      setLocationCoords({
+        lat: clinic.location?.lat ?? 14.5995,
+        lng: clinic.location?.lng ?? 120.9842,
+      });
+      setLastPinnedAddress(clinic.address ?? "");
     }
   }, [clinic]);
+
+  useEffect(() => {
+    if (!isEditing) {
+      setGeocodeStatus("idle");
+      setGeocodeMessage("");
+    }
+  }, [isEditing]);
 
   if (!clinic) {
     return null;
   }
 
-  const handleSave = () => {
-    if (
-      !clinicName.trim() ||
-      !address.trim() ||
-      !phone.trim() ||
-      !email.trim()
-    ) {
+  const handleSave = async () => {
+    if (isSaving) {
+      return;
+    }
+
+    const trimmedName = clinicName.trim();
+    const trimmedAddress = address.trim();
+    const trimmedPhone = phone.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedName || !trimmedAddress || !trimmedPhone || !trimmedEmail) {
       Alert.alert("Error", "Please fill in all required fields");
       return;
     }
 
-    if (services.length === 0) {
-      Alert.alert("Error", "Please add at least one service");
-      return;
-    }
+    const ensuredServices =
+      services.length > 0 ? services : ["General Dentistry"];
 
-    const success = updateClinic(clinic.id, {
-      name: clinicName,
-      address: address,
-      phone: phone,
-      email: email,
-      description: description,
-      servicesOffered: services,
-      operatingHours: operatingHours,
-    });
+    setIsSaving(true);
+    try {
+      if (supportsGooglePlaces) {
+        setGeocodeStatus("loading");
+        setGeocodeMessage("Verifying address with Google Maps…");
+        const couldSync = await syncCoordsForAddress(trimmedAddress);
+        if (!couldSync) {
+          setGeocodeStatus("error");
+          setGeocodeMessage(
+            "Google Maps couldn't find this address. Use search suggestions or pin the map manually.",
+          );
+          Alert.alert(
+            "Pin required",
+            "Google Maps couldn't find this address. Please pick an address from the suggestions or drop a pin on the map before saving.",
+          );
+          return;
+        }
+      }
 
-    if (success) {
-      Alert.alert("Success", "Profile updated successfully");
-      setIsEditing(false);
-    } else {
-      Alert.alert("Error", "Failed to update profile");
+      const success = await updateClinic(clinic.id, {
+        name: trimmedName,
+        address: trimmedAddress,
+        phone: trimmedPhone,
+        email: trimmedEmail,
+        description: description,
+        servicesOffered: ensuredServices,
+        operatingHours: operatingHours,
+        location: {
+          lat: Number(locationCoords.lat),
+          lng: Number(locationCoords.lng),
+        },
+      });
+
+      if (success) {
+        // keep local form in sync
+        setClinicName(trimmedName);
+        setAddress(trimmedAddress);
+        setPhone(trimmedPhone);
+        setEmail(trimmedEmail);
+        setServices(ensuredServices);
+        await refreshClinicsFromFirestore();
+        Alert.alert("Success", "Profile updated successfully");
+        setIsEditing(false);
+      } else {
+        Alert.alert("Error", "Failed to update profile");
+      }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -94,6 +240,13 @@ export default function ClinicProfileScreen({
     setDescription(clinic.description);
     setServices([...clinic.servicesOffered]);
     setOperatingHours({ ...clinic.operatingHours });
+    setLocationCoords({
+      lat: clinic.location?.lat ?? 14.5995,
+      lng: clinic.location?.lng ?? 120.9842,
+    });
+    setLastPinnedAddress(clinic.address ?? "");
+    setGeocodeStatus("idle");
+    setGeocodeMessage("");
     setIsEditing(false);
   };
 
@@ -110,6 +263,109 @@ export default function ClinicProfileScreen({
 
   const handleUpdateHours = (day: string, hours: string) => {
     setOperatingHours({ ...operatingHours, [day]: hours });
+  };
+
+  const handleAddressChange = (text: string) => {
+    setAddress(text);
+    setGeocodeStatus("idle");
+    setGeocodeMessage("");
+  };
+
+  const handlePlaceSelect = (
+    data: PlacesAutocompleteData,
+    details: PlacesAutocompleteDetails | null = null,
+  ) => {
+    const formatted =
+      details?.formatted_address || data?.description || address;
+
+    if (formatted) {
+      setAddress(formatted);
+    }
+
+    const geometryLocation = details?.geometry?.location;
+    if (
+      geometryLocation?.lat !== undefined &&
+      geometryLocation?.lng !== undefined
+    ) {
+      setLocationCoords({
+        lat: geometryLocation.lat,
+        lng: geometryLocation.lng,
+      });
+      if (formatted) {
+        setLastPinnedAddress(formatted);
+      }
+      setGeocodeStatus("success");
+      setGeocodeMessage("Address pinned via Google Maps search.");
+    } else if (formatted) {
+      setGeocodeStatus("loading");
+      setGeocodeMessage("Fetching coordinates from Google Maps…");
+      void syncCoordsForAddress(formatted).then((success) => {
+        if (!success) {
+          setGeocodeStatus("error");
+          setGeocodeMessage(
+            "Couldn't fetch coordinates. Tap the map to pin manually.",
+          );
+        }
+      });
+    }
+  };
+
+  const handleMapPress = (event: {
+    nativeEvent: { coordinate: { latitude: number; longitude: number } };
+  }) => {
+    if (!isEditing) return;
+    const { latitude, longitude } = event.nativeEvent.coordinate;
+    setLocationCoords({ lat: latitude, lng: longitude });
+    setLastPinnedAddress("__manual__");
+    setGeocodeStatus("success");
+    setGeocodeMessage("Map pin updated manually.");
+  };
+
+  const handleCoordinateChange = (axis: "lat" | "lng", value: string) => {
+    const numeric = Number(value);
+    setLocationCoords((prev) => ({
+      ...prev,
+      [axis]: Number.isFinite(numeric) ? numeric : prev[axis],
+    }));
+    setLastPinnedAddress("__manual__");
+    setGeocodeStatus("success");
+    setGeocodeMessage("Coordinates updated manually.");
+  };
+
+  const handleSyncCoordsFromAddress = async () => {
+    const trimmedAddress = address.trim();
+
+    if (!trimmedAddress) {
+      Alert.alert("Missing address", "Please enter an address first.");
+      return;
+    }
+
+    if (!supportsGooglePlaces) {
+      Alert.alert(
+        "Google Maps key needed",
+        "Coordinate sync requires a Google Maps API key. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable this feature.",
+      );
+      return;
+    }
+
+    setGeocodeStatus("loading");
+    setGeocodeMessage("Fetching coordinates from Google Maps…");
+
+    const synced = await syncCoordsForAddress(trimmedAddress);
+    if (!synced) {
+      setGeocodeStatus("error");
+      setGeocodeMessage(
+        "Google Maps couldn't find this address. Try refining it or drop a pin manually.",
+      );
+      Alert.alert(
+        "Location not found",
+        "Google Maps couldn't locate this address. Please adjust the map pin manually.",
+      );
+      return;
+    }
+
+    setGeocodeStatus("success");
+    setGeocodeMessage("Coordinates refreshed from address via Google Maps.");
   };
 
   const handleLogout = () => {
@@ -139,8 +395,12 @@ export default function ClinicProfileScreen({
     ]);
   };
 
+  if (!clinic) {
+    return null;
+  }
+
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} keyboardShouldPersistTaps="handled">
       {/* Navigation Bar */}
       <View style={styles.navBar}>
         <TouchableOpacity
@@ -172,7 +432,7 @@ export default function ClinicProfileScreen({
             placeholder="Clinic Name"
           />
         ) : (
-          <Text style={styles.clinicName}>{clinic.name}</Text>
+          <Text style={styles.clinicName}>{clinicName}</Text>
         )}
         <View style={styles.ratingContainer}>
           <Ionicons name="star" size={18} color="#FFB300" />
@@ -191,15 +451,45 @@ export default function ClinicProfileScreen({
             <View style={styles.infoContent}>
               <Text style={styles.infoLabel}>Address</Text>
               {isEditing ? (
-                <TextInput
-                  style={styles.input}
-                  value={address}
-                  onChangeText={setAddress}
-                  placeholder="Enter address"
-                  multiline
-                />
+                supportsGooglePlaces ? (
+                  <View style={styles.autocompleteWrapper}>
+                    <GooglePlacesAutocomplete
+                      placeholder="Search clinic address"
+                      fetchDetails
+                      onPress={handlePlaceSelect}
+                      query={{
+                        key: googleMapsApiKey,
+                        language: "en",
+                      }}
+                      debounce={300}
+                      minLength={3}
+                      enablePoweredByContainer={false}
+                      textInputProps={{
+                        value: address,
+                        onChangeText: handleAddressChange,
+                        multiline: true,
+                      }}
+                      styles={{
+                        textInput: styles.autocompleteInput,
+                        container: styles.autocompleteContainer,
+                        row: styles.autocompleteRow,
+                        listView: styles.autocompleteList,
+                        separator: styles.autocompleteSeparator,
+                        description: styles.autocompleteDescription,
+                      }}
+                    />
+                  </View>
+                ) : (
+                  <TextInput
+                    style={styles.input}
+                    value={address}
+                    onChangeText={handleAddressChange}
+                    placeholder="Enter address"
+                    multiline
+                  />
+                )
               ) : (
-                <Text style={styles.infoValue}>{clinic.address}</Text>
+                <Text style={styles.infoValue}>{address}</Text>
               )}
             </View>
           </View>
@@ -219,7 +509,7 @@ export default function ClinicProfileScreen({
                   keyboardType="phone-pad"
                 />
               ) : (
-                <Text style={styles.infoValue}>{clinic.phone}</Text>
+                <Text style={styles.infoValue}>{phone}</Text>
               )}
             </View>
           </View>
@@ -240,10 +530,104 @@ export default function ClinicProfileScreen({
                   autoCapitalize="none"
                 />
               ) : (
-                <Text style={styles.infoValue}>{clinic.email}</Text>
+                <Text style={styles.infoValue}>{email}</Text>
               )}
             </View>
           </View>
+        </View>
+      </View>
+
+      {/* Map Location */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Map Location</Text>
+        <View style={styles.mapCard}>
+          <MapView
+            style={styles.mapView}
+            provider={PROVIDER_GOOGLE}
+            initialRegion={{
+              latitude: locationCoords.lat,
+              longitude: locationCoords.lng,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }}
+            region={{
+              latitude: locationCoords.lat,
+              longitude: locationCoords.lng,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }}
+            onPress={handleMapPress}
+          >
+            <Marker
+              coordinate={{
+                latitude: locationCoords.lat,
+                longitude: locationCoords.lng,
+              }}
+              title={clinicName}
+              description={address}
+            />
+          </MapView>
+
+          {isEditing ? (
+            <>
+              <Text style={styles.mapHint}>
+                Tap on the map to pin your exact clinic location or adjust the
+                coordinates below.
+              </Text>
+              {supportsGooglePlaces && (
+                <TouchableOpacity
+                  style={styles.mapHintButton}
+                  onPress={handleSyncCoordsFromAddress}
+                >
+                  <Ionicons name="refresh" size={16} color="#059669" />
+                  <Text style={styles.mapHintButtonText}>
+                    Use address coordinates
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {geocodeMessage.length > 0 && (
+                <Text
+                  style={[
+                    styles.mapHint,
+                    geocodeStatus === "error"
+                      ? styles.mapHintError
+                      : geocodeStatus === "loading"
+                        ? styles.mapHintLoading
+                        : styles.mapHintSuccess,
+                  ]}
+                >
+                  {geocodeMessage}
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text style={styles.mapHint}>
+              Pinned by clinic team · Used for patient map search
+            </Text>
+          )}
+
+          {isEditing && (
+            <View style={styles.coordRow}>
+              <View style={styles.coordField}>
+                <Text style={styles.coordLabel}>Latitude</Text>
+                <TextInput
+                  style={styles.coordInput}
+                  value={String(locationCoords.lat)}
+                  onChangeText={(text) => handleCoordinateChange("lat", text)}
+                  keyboardType="numeric"
+                />
+              </View>
+              <View style={styles.coordField}>
+                <Text style={styles.coordLabel}>Longitude</Text>
+                <TextInput
+                  style={styles.coordInput}
+                  value={String(locationCoords.lng)}
+                  onChangeText={(text) => handleCoordinateChange("lng", text)}
+                  keyboardType="numeric"
+                />
+              </View>
+            </View>
+          )}
         </View>
       </View>
 
@@ -262,7 +646,7 @@ export default function ClinicProfileScreen({
               textAlignVertical="top"
             />
           ) : (
-            <Text style={styles.descriptionText}>{clinic.description}</Text>
+            <Text style={styles.descriptionText}>{description}</Text>
           )}
         </View>
       </View>
@@ -382,8 +766,14 @@ export default function ClinicProfileScreen({
           <TouchableOpacity style={styles.cancelBtn} onPress={handleCancel}>
             <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-            <Text style={styles.saveBtnText}>Save Changes</Text>
+          <TouchableOpacity
+            style={[styles.saveBtn, isSaving && styles.saveBtnDisabled]}
+            onPress={handleSave}
+            disabled={isSaving}
+          >
+            <Text style={styles.saveBtnText}>
+              {isSaving ? "Saving…" : "Save Changes"}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -744,6 +1134,44 @@ const styles = StyleSheet.create({
     borderColor: "#E0E0E0",
     marginTop: 5,
   },
+  autocompleteWrapper: {
+    zIndex: 20,
+  },
+  autocompleteContainer: {
+    flex: 0,
+  },
+  autocompleteInput: {
+    fontSize: 14,
+    color: "#333",
+    backgroundColor: "#F9F9F9",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+  },
+  autocompleteList: {
+    borderRadius: 12,
+    marginTop: 8,
+    backgroundColor: "#FFF",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  autocompleteRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  autocompleteSeparator: {
+    height: 1,
+    backgroundColor: "#F0F0F0",
+  },
+  autocompleteDescription: {
+    color: "#111827",
+    fontSize: 14,
+  },
   textArea: {
     fontSize: 14,
     color: "#333",
@@ -763,6 +1191,67 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
     lineHeight: 20,
+  },
+  mapCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 12,
+    gap: 12,
+  },
+  mapView: {
+    height: 220,
+    borderRadius: 12,
+  },
+  mapHint: {
+    color: "#4B5563",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  mapHintButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: "#ECFDF5",
+    marginTop: 8,
+    gap: 6,
+  },
+  mapHintButtonText: {
+    color: "#047857",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  mapHintSuccess: {
+    color: "#059669",
+  },
+  mapHintError: {
+    color: "#DC2626",
+  },
+  mapHintLoading: {
+    color: "#6B7280",
+  },
+  coordRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  coordField: {
+    flex: 1,
+  },
+  coordLabel: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginBottom: 6,
+  },
+  coordInput: {
+    backgroundColor: "#F9F9F9",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    color: "#111827",
   },
   actionButtons: {
     flexDirection: "row",
@@ -788,6 +1277,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: "#00BFA6",
     alignItems: "center",
+  },
+  saveBtnDisabled: {
+    opacity: 0.7,
   },
   saveBtnText: {
     fontSize: 16,

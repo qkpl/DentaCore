@@ -500,16 +500,26 @@ export const filterClinics = (filters: {
   return filtered;
 };
 
-export const updateClinic = (
+export const updateClinic = async (
   clinicId: string,
   updates: Partial<Omit<Clinic, "id">>,
-): boolean => {
+): Promise<boolean> => {
   const index = mockClinics.findIndex((c) => c.id === clinicId);
-  if (index !== -1) {
-    mockClinics[index] = { ...mockClinics[index], ...updates };
-    return true;
+  if (index === -1) {
+    return false;
   }
-  return false;
+
+  const previousClinic = { ...mockClinics[index] };
+  mockClinics[index] = { ...previousClinic, ...updates };
+
+  try {
+    await updateDoc(doc(db, "clinics", clinicId), updates);
+    return true;
+  } catch (error) {
+    console.warn("Failed to update clinic in Firestore", error);
+    mockClinics[index] = previousClinic;
+    return false;
+  }
 };
 
 export const deleteClinic = (clinicId: string): boolean => {
