@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
@@ -13,7 +14,7 @@ import {
 import { useAuth } from "../../context/AuthContext";
 import { Appointment } from "../../data/mockData";
 import {
-  deleteAppointment,
+  cancelAppointment,
   getAppointmentsByPatient,
 } from "../../services/dataService";
 import RescheduleAppointmentScreen from "./RescheduleAppointmentScreen";
@@ -58,8 +59,27 @@ export default function AppointmentsScreen({
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [feedbackMessage, setFeedbackMessage] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
 
-  const appointments = user ? getAppointmentsByPatient(user.id) : [];
+  const loadAppointments = useCallback(() => {
+    if (!user) {
+      setAppointments([]);
+      return;
+    }
+
+    const patientAppointments = getAppointmentsByPatient(user.id);
+    setAppointments(patientAppointments);
+  }, [user]);
+
+  useEffect(() => {
+    loadAppointments();
+  }, [loadAppointments, refreshTrigger]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadAppointments();
+    }, [loadAppointments]),
+  );
 
   const statusSummary = useMemo(() => {
     const counts: Record<string, number> = {
@@ -128,9 +148,13 @@ export default function AppointmentsScreen({
   };
 
   const handleViewDetails = (appointment: Appointment) => {
+    const reasonLine =
+      appointment.status === "cancelled" && appointment.cancellationReason
+        ? `\nReason: ${appointment.cancellationReason}`
+        : "";
     Alert.alert(
       "Appointment Details",
-      `Clinic: ${appointment.clinicName}\nDoctor: ${formatDentistName(appointment.dentistName)}\nType: ${appointment.type}\nDate: ${appointment.date}\nTime: ${appointment.time}\nStatus: ${appointment.status}`,
+      `Clinic: ${appointment.clinicName}\nDoctor: ${formatDentistName(appointment.dentistName)}\nType: ${appointment.type}\nDate: ${appointment.date}\nTime: ${appointment.time}\nStatus: ${appointment.status}${reasonLine}`,
       [{ text: "OK" }],
     );
   };
@@ -141,6 +165,14 @@ export default function AppointmentsScreen({
   };
 
   const handleCancelAppointment = (appointment: Appointment) => {
+    if (appointment.status !== "pending") {
+      Alert.alert(
+        "Cannot Cancel",
+        "Only pending appointments can be cancelled. Please contact the clinic to make further changes.",
+      );
+      return;
+    }
+
     Alert.alert(
       "Cancel Appointment",
       `Are you sure you want to cancel your appointment with ${appointment.clinicName}?\n\nDate: ${appointment.date}\nTime: ${appointment.time}`,
@@ -150,7 +182,10 @@ export default function AppointmentsScreen({
           text: "Yes, Cancel",
           style: "destructive",
           onPress: () => {
-            const success = deleteAppointment(appointment.id);
+            const success = cancelAppointment(
+              appointment.id,
+              "Cancelled by patient",
+            );
             if (success) {
               setFeedbackMessage("Appointment cancelled successfully.");
               setRefreshTrigger((prev) => prev + 1);
@@ -187,7 +222,7 @@ export default function AppointmentsScreen({
       { key: "pending", label: "Pending", ...STATUS_COLORS.pending },
       { key: "confirmed", label: "Confirmed", ...STATUS_COLORS.confirmed },
       { key: "completed", label: "Completed", ...STATUS_COLORS.completed },
-      { key: "cancelled", label: "Rejected", ...STATUS_COLORS.cancelled },
+      { key: "cancelled", label: "Cancelled", ...STATUS_COLORS.cancelled },
     ] as const;
 
     return (
@@ -353,7 +388,7 @@ export default function AppointmentsScreen({
                       ]}
                     >
                       {appointment.status === "cancelled"
-                        ? "Rejected"
+                        ? "Cancelled"
                         : appointment.status}
                     </Text>
                   </View>
@@ -391,6 +426,19 @@ export default function AppointmentsScreen({
                       {formatDentistName(appointment.dentistName)}
                     </Text>
                   </View>
+                  {appointment.status === "cancelled" &&
+                    appointment.cancellationReason && (
+                      <View style={styles.cancellationBanner}>
+                        <Ionicons
+                          name="alert-circle-outline"
+                          size={16}
+                          color="#B45309"
+                        />
+                        <Text style={styles.cancellationText}>
+                          {appointment.cancellationReason}
+                        </Text>
+                      </View>
+                    )}
                 </View>
 
                 <View style={styles.cardActions}>
@@ -401,30 +449,46 @@ export default function AppointmentsScreen({
                     <Ionicons name="eye-outline" size={16} color="#00BFA6" />
                     <Text style={styles.viewDetailsText}>View Details</Text>
                   </TouchableOpacity>
-                  {appointment.status !== "completed" &&
-                    appointment.status !== "cancelled" && (
+                  {(() => {
+                    const canReschedule =
+                      appointment.status === "pending" ||
+                      appointment.status === "confirmed";
+                    const canCancel = appointment.status === "pending";
+
+                    if (!canReschedule && !canCancel) {
+                      return null;
+                    }
+
+                    return (
                       <View style={styles.secondaryActions}>
-                        <TouchableOpacity
-                          style={styles.secondaryActionButton}
-                          onPress={() => handleReschedule(appointment)}
-                        >
-                          <Ionicons name="calendar" size={14} color="#FFF" />
-                          <Text style={styles.secondaryActionText}>
-                            Reschedule
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={[
-                            styles.secondaryActionButton,
-                            styles.secondaryDanger,
-                          ]}
-                          onPress={() => handleCancelAppointment(appointment)}
-                        >
-                          <Ionicons name="close" size={14} color="#FFF" />
-                          <Text style={styles.secondaryActionText}>Cancel</Text>
-                        </TouchableOpacity>
+                        {canReschedule && (
+                          <TouchableOpacity
+                            style={styles.secondaryActionButton}
+                            onPress={() => handleReschedule(appointment)}
+                          >
+                            <Ionicons name="calendar" size={14} color="#FFF" />
+                            <Text style={styles.secondaryActionText}>
+                              Reschedule
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        {canCancel && (
+                          <TouchableOpacity
+                            style={[
+                              styles.secondaryActionButton,
+                              styles.secondaryDanger,
+                            ]}
+                            onPress={() => handleCancelAppointment(appointment)}
+                          >
+                            <Ionicons name="close" size={14} color="#FFF" />
+                            <Text style={styles.secondaryActionText}>
+                              Cancel
+                            </Text>
+                          </TouchableOpacity>
+                        )}
                       </View>
-                    )}
+                    );
+                  })()}
                 </View>
               </View>
             );
@@ -635,6 +699,21 @@ const styles = StyleSheet.create({
   cardBody: {
     marginTop: 12,
     gap: 8,
+  },
+  cancellationBanner: {
+    marginTop: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#FEF3C7",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  cancellationText: {
+    flex: 1,
+    color: "#92400E",
+    fontSize: 13,
   },
   serviceChip: {
     flexDirection: "row",

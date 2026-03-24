@@ -1,30 +1,31 @@
 import { Clinic, mockClinics, mockUsers, User } from "@/data/mockData";
 import {
-  activateClinic,
-  getClinicById,
-  syncAppointmentsFromFirestore,
+    activateClinic,
+    getClinicById,
+    syncAdminRelationships,
+    syncAppointmentsFromFirestore,
 } from "@/services/dataService";
 import { auth, db } from "@/services/firebase";
 import {
-  createUserWithEmailAndPassword,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signOut,
+    createUserWithEmailAndPassword,
+    onAuthStateChanged,
+    signInWithEmailAndPassword,
+    signOut,
 } from "firebase/auth";
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
+    collection,
+    doc,
+    getDoc,
+    getDocs,
+    setDoc,
+    updateDoc,
 } from "firebase/firestore";
 import React, {
-  createContext,
-  ReactNode,
-  useContext,
-  useEffect,
-  useState,
+    createContext,
+    ReactNode,
+    useContext,
+    useEffect,
+    useState,
 } from "react";
 
 interface AuthResponse {
@@ -53,6 +54,96 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+const buildDefaultAdminUser = (): User => {
+  const managedClinicIds = mockClinics.map((clinic) => clinic.id);
+  const managedPatientIds = mockUsers
+    .filter((user) => user.role === "patient")
+    .map((user) => user.id);
+
+  return {
+    id: "admin1",
+    name: "System Admin",
+    email: "admin@dentacore.com",
+    phone: "+1 (555) 999-0000",
+    role: "admin",
+    password: "admin123",
+    managedClinicIds,
+    managedPatientIds,
+  };
+};
+
+const ensureAdminAuthAccount = async (
+  email: string,
+  password: string,
+): Promise<void> => {
+  // Skip seeding if someone is already signed in (respect persisted sessions)
+  if (auth.currentUser) {
+    return;
+  }
+
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (error: any) {
+    if (error?.code === "auth/user-not-found") {
+      try {
+        await createUserWithEmailAndPassword(auth, email, password);
+      } catch (createError) {
+        console.warn("Failed to create default admin account", createError);
+      }
+    } else {
+      console.warn("Failed to sign in default admin", error);
+    }
+  } finally {
+    try {
+      await signOut(auth);
+    } catch (signOutError) {
+      // Ignore sign-out error; this only runs during admin seeding
+    }
+  }
+};
+
+const ensureDefaultAdminUser = async (): Promise<void> => {
+  const adminTemplate = buildDefaultAdminUser();
+  const adminIndex = mockUsers.findIndex(
+    (user) => user.id === adminTemplate.id,
+  );
+
+  if (adminIndex === -1) {
+    mockUsers.push(adminTemplate);
+  } else {
+    mockUsers[adminIndex] = { ...mockUsers[adminIndex], ...adminTemplate };
+  }
+
+  syncAdminRelationships();
+
+  try {
+    const adminDocRef = doc(db, "users", adminTemplate.id);
+    const snapshot = await getDoc(adminDocRef);
+
+    if (!snapshot.exists()) {
+      await setDoc(adminDocRef, adminTemplate);
+      await ensureAdminAuthAccount(adminTemplate.email, adminTemplate.password);
+      return;
+    }
+
+    const remoteData = snapshot.data() as User;
+    const needsManagedClinicUpdate =
+      (remoteData.managedClinicIds?.length || 0) !==
+      (adminTemplate.managedClinicIds?.length || 0);
+    const needsManagedPatientUpdate =
+      (remoteData.managedPatientIds?.length || 0) !==
+      (adminTemplate.managedPatientIds?.length || 0);
+
+    if (needsManagedClinicUpdate || needsManagedPatientUpdate) {
+      await setDoc(adminDocRef, adminTemplate, { merge: true });
+    }
+
+    await ensureAdminAuthAccount(adminTemplate.email, adminTemplate.password);
+  } catch (error) {
+    // Ignore failures when seeding admin account to keep offline support working.
+  }
+};
 
 const localSignup = async (
   email: string,
@@ -128,6 +219,7 @@ const localSignup = async (
   }
 
   mockUsers.push(newUser);
+  syncAdminRelationships();
 
   if (role === "clinic") {
     activateClinic(newUserId);
@@ -198,6 +290,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   };
 
   useEffect(() => {
+    void ensureDefaultAdminUser();
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         try {
@@ -398,6 +491,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
       }
 
       await setDoc(doc(db, "users", userId), newUser);
+      mockUsers.push(newUser);
+      syncAdminRelationships();
 
       if (role === "clinic") {
         const clinicData: Clinic = {

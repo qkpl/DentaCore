@@ -1,22 +1,24 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { User } from "../../data/mockData";
 import {
-    deleteUser,
-    getAllUsers,
-    getUsersByRole,
-    updateUser,
+  deleteUser,
+  getAllUsers,
+  getUsersByRole,
+  updateUser,
 } from "../../services/dataService";
+
+const accentColor = "#0FB7B1";
 
 interface AdminUsersScreenProps {
   navigation: any;
@@ -39,7 +41,44 @@ export default function AdminUsersScreen({
   const [userPhone, setUserPhone] = useState("");
   const [userAddress, setUserAddress] = useState("");
 
-  const allUsers = getAllUsers();
+  const allUsers = useMemo(() => getAllUsers(), [refreshTrigger]);
+
+  const filterOptions: Array<{
+    key: "all" | "patient" | "clinic" | "admin";
+    label: string;
+    count: number;
+    icon: keyof typeof Ionicons.glyphMap;
+    accent: string;
+  }> = [
+    {
+      key: "all",
+      label: "All",
+      count: allUsers.length,
+      icon: "grid-outline",
+      accent: "#DCF6F1",
+    },
+    {
+      key: "patient",
+      label: "Patients",
+      count: allUsers.filter((u) => u.role === "patient").length,
+      icon: "people-outline",
+      accent: "#E0F2FE",
+    },
+    {
+      key: "clinic",
+      label: "Clinics",
+      count: allUsers.filter((u) => u.role === "clinic").length,
+      icon: "medkit-outline",
+      accent: "#E7E5FF",
+    },
+    {
+      key: "admin",
+      label: "Admins",
+      count: allUsers.filter((u) => u.role === "admin").length,
+      icon: "ribbon-outline",
+      accent: "#FEE2E2",
+    },
+  ];
 
   // Sync form fields with selected user
   useEffect(() => {
@@ -167,77 +206,77 @@ export default function AdminUsersScreen({
       </View>
 
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#999" />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search users..."
-          placeholderTextColor="#999"
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-        />
+      <View style={styles.searchWrapper}>
+        <View style={styles.searchBar}>
+          <Ionicons name="search" size={18} color="#94A3B8" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search name or email"
+            placeholderTextColor="#94A3B8"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+        <TouchableOpacity
+          style={styles.searchAction}
+          onPress={() => Alert.alert("Filters", "Advanced filters coming soon")}
+        >
+          <Ionicons name="filter" size={18} color={accentColor} />
+        </TouchableOpacity>
       </View>
 
-      {/* Filter Tabs */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabsContainer}
-        contentContainerStyle={styles.tabsContent}
-      >
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "all" && styles.tabActive]}
-          onPress={() => setSelectedFilter("all")}
+      {/* Filter Squares */}
+      <View style={styles.filterSection}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.filterRow}
         >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "all" && styles.tabTextActive,
-            ]}
-          >
-            All ({allUsers.length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "patient" && styles.tabActive]}
-          onPress={() => setSelectedFilter("patient")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "patient" && styles.tabTextActive,
-            ]}
-          >
-            Patients ({getUsersByRole("patient").length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "clinic" && styles.tabActive]}
-          onPress={() => setSelectedFilter("clinic")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "clinic" && styles.tabTextActive,
-            ]}
-          >
-            Clinics ({getUsersByRole("clinic").length})
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, selectedFilter === "admin" && styles.tabActive]}
-          onPress={() => setSelectedFilter("admin")}
-        >
-          <Text
-            style={[
-              styles.tabText,
-              selectedFilter === "admin" && styles.tabTextActive,
-            ]}
-          >
-            Admins ({getUsersByRole("admin").length})
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
+          {filterOptions.map(({ key, label, count, icon, accent }) => (
+            <TouchableOpacity
+              key={key}
+              style={[
+                styles.filterSquare,
+                selectedFilter === key && styles.filterSquareActive,
+              ]}
+              onPress={() => setSelectedFilter(key)}
+              activeOpacity={0.9}
+            >
+              <View
+                style={[
+                  styles.filterSquareIconWrap,
+                  { backgroundColor: accent },
+                  selectedFilter === key && styles.filterSquareIconWrapActive,
+                ]}
+              >
+                <Ionicons
+                  name={icon}
+                  size={18}
+                  color={selectedFilter === key ? "#FFFFFF" : accentColor}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.filterSquareLabel,
+                  selectedFilter === key && styles.filterSquareLabelActive,
+                ]}
+              >
+                {label}
+              </Text>
+              <Text
+                style={[
+                  styles.filterSquareCount,
+                  selectedFilter === key && styles.filterSquareCountActive,
+                ]}
+              >
+                {count}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </View>
 
       {/* Users List */}
       <ScrollView style={styles.content}>
@@ -480,54 +519,101 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
   },
-  searchContainer: {
+  searchWrapper: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginHorizontal: 20,
+    marginTop: 16,
+    gap: 12,
+  },
+  searchBar: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFF",
-    marginHorizontal: 20,
-    marginTop: 20,
-    paddingHorizontal: 15,
-    paddingVertical: 12,
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    backgroundColor: "#F4F8FB",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: "#E1EDF5",
   },
   searchInput: {
     flex: 1,
     marginLeft: 10,
-    fontSize: 16,
-    color: "#333",
-  },
-  tabsContainer: {
-    backgroundColor: "#FFF",
-    marginTop: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F0F0",
-  },
-  tabsContent: {
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-  },
-  tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    marginRight: 10,
-    borderRadius: 20,
-    backgroundColor: "#F5F5F5",
-  },
-  tabActive: {
-    backgroundColor: "#7C4DFF",
-  },
-  tabText: {
     fontSize: 14,
-    fontWeight: "600",
-    color: "#666",
+    color: "#0F172A",
   },
-  tabTextActive: {
-    color: "#FFF",
+  searchAction: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "#E6FFFA",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#CCFBF1",
+  },
+  filterSection: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  filterRow: {
+    flexDirection: "row",
+    gap: 10,
+    paddingVertical: 4,
+  },
+  filterSquare: {
+    width: 86,
+    height: 120,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    backgroundColor: "#F8F9FB",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+  },
+  filterSquareActive: {
+    backgroundColor: "#ECFDF5",
+    borderColor: accentColor,
+    shadowColor: accentColor,
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  filterSquareIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  filterSquareIconWrapActive: {
+    backgroundColor: accentColor,
+    borderWidth: 1,
+    borderColor: accentColor,
+  },
+  filterSquareLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#6B7280",
+    textAlign: "center",
+    marginBottom: 6,
+  },
+  filterSquareLabelActive: {
+    color: accentColor,
+  },
+  filterSquareCount: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  filterSquareCountActive: {
+    color: "#065F46",
   },
   content: {
     flex: 1,

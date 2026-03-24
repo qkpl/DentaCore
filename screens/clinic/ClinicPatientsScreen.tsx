@@ -1,22 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { DentalRecord } from "../../data/mockData";
 import {
-    createDentalRecord,
-    getAppointmentsByClinic,
-    getRecordsByClinic,
+  createDentalRecord,
+  getAppointmentsByClinic,
+  getRecordsByClinic,
 } from "../../services/dataService";
 
 interface PatientSummary {
@@ -84,6 +84,26 @@ const getNearestUpcomingTimestamp = (summary: PatientSummary): number => {
   return Number.POSITIVE_INFINITY;
 };
 
+const getInitials = (fullName: string): string => {
+  if (!fullName) {
+    return "";
+  }
+
+  const parts = fullName.trim().split(/\s+/);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "");
+  return initials.join("") || fullName[0]?.toUpperCase() || "";
+};
+
+const RECORD_VIEW_TABS: Array<{
+  key: "appointments" | "records";
+  label: string;
+}> = [
+  { key: "appointments", label: "Appointments" },
+  { key: "records", label: "Records" },
+];
+
 interface ClinicPatientsScreenProps {
   navigation: any;
 }
@@ -113,6 +133,23 @@ export default function ClinicPatientsScreen({
   const [newRecordTreatment, setNewRecordTreatment] = React.useState("");
   const [newRecordNotes, setNewRecordNotes] = React.useState("");
   const [isSavingRecord, setIsSavingRecord] = React.useState(false);
+  const [recordsView, setRecordsView] = React.useState<
+    "appointments" | "records"
+  >("records");
+  const [recordSearchQuery, setRecordSearchQuery] = React.useState("");
+
+  const filteredActiveRecords = React.useMemo(() => {
+    const query = recordSearchQuery.trim().toLowerCase();
+    if (!query) {
+      return activePatientRecords;
+    }
+
+    return activePatientRecords.filter((record) => {
+      const haystack =
+        `${record.type} ${record.treatment} ${record.dentistName} ${record.notes ?? ""}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activePatientRecords, recordSearchQuery]);
 
   React.useEffect(() => {
     let isMounted = true;
@@ -266,6 +303,8 @@ export default function ClinicPatientsScreen({
     setIsRecordsModalVisible(false);
     setActivePatient(null);
     setActivePatientRecords([]);
+    setRecordsView("records");
+    setRecordSearchQuery("");
   };
 
   const handleSaveRecord = async () => {
@@ -357,7 +396,17 @@ export default function ClinicPatientsScreen({
     const patientRecordsList = patientRecords[summary.patientId] || [];
     setActivePatient(summary);
     setActivePatientRecords(patientRecordsList);
+    setRecordsView("records");
+    setRecordSearchQuery("");
     setIsRecordsModalVisible(true);
+  };
+
+  const handleViewFullRecord = (record: DentalRecord) => {
+    Alert.alert(
+      record.type,
+      `Treatment: ${record.treatment}\nDentist: ${record.dentistName}\nDate: ${record.date}\n\nNotes:\n${record.notes || "No additional notes."}`,
+      [{ text: "Close", style: "cancel" }],
+    );
   };
 
   return (
@@ -586,75 +635,229 @@ export default function ClinicPatientsScreen({
         onRequestClose={closeRecordsModal}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Patient Records</Text>
-              <TouchableOpacity onPress={closeRecordsModal}>
-                <Ionicons name="close" size={24} color="#666" />
+          <View style={styles.recordsModalCard}>
+            <View style={styles.recordsHeaderRow}>
+              {activePatient ? (
+                <View style={styles.recordsPatientInfo}>
+                  <View style={styles.recordsAvatar}>
+                    <Text style={styles.recordsAvatarText}>
+                      {getInitials(activePatient.patientName)}
+                    </Text>
+                  </View>
+                  <View>
+                    <Text style={styles.recordsPatientName}>
+                      {activePatient.patientName}
+                    </Text>
+                    <Text style={styles.recordsPatientId}>
+                      Patient ID • {activePatient.patientId}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.recordsPatientName}>Patient Records</Text>
+              )}
+              <TouchableOpacity
+                style={styles.recordsCloseButton}
+                onPress={closeRecordsModal}
+                accessibilityLabel="Close records modal"
+              >
+                <Ionicons name="close" size={18} color="#4B5563" />
               </TouchableOpacity>
             </View>
 
             {activePatient ? (
-              <View style={styles.recordsPatientHeader}>
-                <Text style={styles.recordsPatientName}>
-                  {activePatient.patientName}
-                </Text>
-                <Text style={styles.recordsPatientId}>
-                  ID: {activePatient.patientId}
-                </Text>
-
-                <Text style={[styles.modalLabel, styles.recordsSectionTitle]}>
-                  Accepted Appointments
-                </Text>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={styles.appointmentChips}
-                >
-                  {activePatient.acceptedAppointments.map((appointment) => (
-                    <View key={appointment.id} style={styles.appointmentChip}>
-                      <Text style={styles.appointmentChipText}>
-                        {appointment.type} • {appointment.date} at{" "}
-                        {appointment.time}
-                      </Text>
-                    </View>
-                  ))}
-                </ScrollView>
+              <View style={styles.recordsTabs}>
+                {RECORD_VIEW_TABS.map((tab) => (
+                  <TouchableOpacity
+                    key={tab.key}
+                    style={[
+                      styles.recordsTab,
+                      recordsView === tab.key && styles.recordsTabActive,
+                    ]}
+                    onPress={() => setRecordsView(tab.key)}
+                  >
+                    <Text
+                      style={[
+                        styles.recordsTabText,
+                        recordsView === tab.key && styles.recordsTabTextActive,
+                      ]}
+                    >
+                      {tab.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
             ) : null}
 
-            <Text style={[styles.modalLabel, styles.recordsSectionTitle]}>
-              Dental Records
-            </Text>
-
-            {activePatientRecords.length === 0 ? (
-              <View style={styles.emptyRecordState}>
-                <Ionicons name="document-text" size={40} color="#CCC" />
-                <Text style={styles.emptyRecordText}>
-                  No clinical records yet.
-                </Text>
-              </View>
-            ) : (
-              <ScrollView style={styles.recordsList}>
-                {activePatientRecords.map((record) => (
-                  <View key={record.id} style={styles.recordCard}>
-                    <View style={styles.recordHeader}>
-                      <Text style={styles.recordTitle}>{record.type}</Text>
-                      <Text style={styles.recordDate}>{record.date}</Text>
+            <ScrollView
+              style={styles.recordsScrollArea}
+              showsVerticalScrollIndicator={false}
+            >
+              {recordsView === "appointments" ? (
+                <View>
+                  <Text style={styles.recordsSectionLabel}>
+                    Accepted Appointments
+                  </Text>
+                  {activePatient?.acceptedAppointments.length ? (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.appointmentCardsRow}
+                    >
+                      {activePatient.acceptedAppointments.map((appointment) => (
+                        <View
+                          key={appointment.id}
+                          style={styles.recordsAppointmentCard}
+                        >
+                          <View style={styles.recordsAppointmentIcon}>
+                            <Ionicons
+                              name="medkit-outline"
+                              size={16}
+                              color="#0F766E"
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.recordsAppointmentTitle}>
+                              {appointment.type}
+                            </Text>
+                            <View style={styles.recordsAppointmentMetaRow}>
+                              <Ionicons
+                                name="calendar-outline"
+                                size={14}
+                                color="#6B7280"
+                              />
+                              <Text style={styles.recordsAppointmentMetaText}>
+                                {appointment.date}
+                              </Text>
+                            </View>
+                            <View style={styles.recordsAppointmentMetaRow}>
+                              <Ionicons
+                                name="time-outline"
+                                size={14}
+                                color="#6B7280"
+                              />
+                              <Text style={styles.recordsAppointmentMetaText}>
+                                {appointment.time}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+                      ))}
+                    </ScrollView>
+                  ) : (
+                    <View style={styles.emptyRecordState}>
+                      <Ionicons
+                        name="calendar-outline"
+                        size={32}
+                        color="#D1D5DB"
+                      />
+                      <Text style={styles.emptyRecordText}>
+                        No accepted appointments yet.
+                      </Text>
                     </View>
-                    <Text style={styles.recordDentist}>
-                      Dentist: {record.dentistName}
-                    </Text>
-                    <Text style={styles.recordTreatment}>
-                      Treatment: {record.treatment}
-                    </Text>
-                    {!!record.notes && (
-                      <Text style={styles.recordNotes}>{record.notes}</Text>
+                  )}
+                </View>
+              ) : (
+                <View>
+                  <Text style={styles.recordsSectionLabel}>Dental Records</Text>
+                  <View style={styles.recordsSearchBar}>
+                    <Ionicons name="search-outline" size={16} color="#9CA3AF" />
+                    <TextInput
+                      style={styles.recordsSearchInput}
+                      placeholder="Search treatment, dentist or notes"
+                      placeholderTextColor="#9CA3AF"
+                      value={recordSearchQuery}
+                      onChangeText={setRecordSearchQuery}
+                    />
+                    {recordSearchQuery.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setRecordSearchQuery("")}
+                        accessibilityLabel="Clear record search"
+                      >
+                        <Ionicons
+                          name="close-circle"
+                          size={18}
+                          color="#9CA3AF"
+                        />
+                      </TouchableOpacity>
                     )}
                   </View>
-                ))}
-              </ScrollView>
-            )}
+
+                  {filteredActiveRecords.length === 0 ? (
+                    <View style={styles.emptyRecordState}>
+                      <Ionicons
+                        name="document-text"
+                        size={40}
+                        color="#D1D5DB"
+                      />
+                      <Text style={styles.emptyRecordText}>
+                        No clinical records found.
+                      </Text>
+                    </View>
+                  ) : (
+                    filteredActiveRecords.map((record) => (
+                      <View key={record.id} style={styles.recordCard}>
+                        <View style={styles.recordTopRow}>
+                          <Text style={styles.recordTitle}>
+                            {record.treatment || record.type}
+                          </Text>
+                          <View style={styles.recordDateChip}>
+                            <Ionicons
+                              name="calendar-outline"
+                              size={12}
+                              color="#047857"
+                            />
+                            <Text style={styles.recordDateText}>
+                              {record.date}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.recordMetaRow}>
+                          <View style={styles.recordMetaItem}>
+                            <Ionicons
+                              name="person-circle-outline"
+                              size={14}
+                              color="#6B7280"
+                            />
+                            <Text style={styles.recordMetaText}>
+                              {record.dentistName}
+                            </Text>
+                          </View>
+                          <View style={styles.recordMetaItem}>
+                            <Ionicons
+                              name="medkit-outline"
+                              size={14}
+                              color="#6B7280"
+                            />
+                            <Text style={styles.recordMetaText}>
+                              {record.type}
+                            </Text>
+                          </View>
+                        </View>
+                        {!!record.notes && (
+                          <Text style={styles.recordNotes} numberOfLines={3}>
+                            {record.notes}
+                          </Text>
+                        )}
+                        <TouchableOpacity
+                          style={styles.viewRecordButton}
+                          onPress={() => handleViewFullRecord(record)}
+                        >
+                          <Text style={styles.viewRecordButtonText}>
+                            View Full Record
+                          </Text>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={14}
+                            color="#0F766E"
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -910,37 +1113,137 @@ const styles = StyleSheet.create({
   patientChipTextSelected: {
     color: "#FFF",
   },
-  recordsPatientHeader: {
-    marginBottom: 10,
+  recordsModalCard: {
+    width: "100%",
+    maxHeight: "88%",
+    backgroundColor: "#FFF",
+    borderRadius: 24,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 12,
   },
-  recordsPatientName: {
+  recordsHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  recordsPatientInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  recordsAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#DCFCE7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  recordsAvatarText: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#222",
+    color: "#047857",
+  },
+  recordsPatientName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
   },
   recordsPatientId: {
-    fontSize: 13,
-    color: "#777",
+    fontSize: 12,
+    color: "#6B7280",
     marginTop: 2,
   },
-  recordsSectionTitle: {
-    marginTop: 16,
+  recordsCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
   },
-  appointmentChips: {
-    marginTop: 6,
+  recordsTabs: {
+    flexDirection: "row",
+    backgroundColor: "#E5E7EB",
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 16,
   },
-  appointmentChip: {
-    backgroundColor: "#F2FFFC",
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: "#CCF5EA",
+  recordsTab: {
+    flex: 1,
+    borderRadius: 999,
+    alignItems: "center",
+    paddingVertical: 10,
   },
-  appointmentChipText: {
-    color: "#077562",
+  recordsTabActive: {
+    backgroundColor: "#FFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  recordsTabText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#6B7280",
+  },
+  recordsTabTextActive: {
+    color: "#047857",
+  },
+  recordsScrollArea: {
+    flexGrow: 0,
+  },
+  recordsSectionLabel: {
     fontSize: 12,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    color: "#9CA3AF",
+    marginBottom: 12,
+  },
+  appointmentCardsRow: {
+    paddingVertical: 4,
+    paddingRight: 6,
+  },
+  recordsAppointmentCard: {
+    width: 220,
+    flexDirection: "row",
+    backgroundColor: "#ECFDF5",
+    borderRadius: 16,
+    padding: 14,
+    marginRight: 12,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  recordsAppointmentIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#D1FAE5",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  recordsAppointmentTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#065F46",
+  },
+  recordsAppointmentMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+  },
+  recordsAppointmentMetaText: {
+    marginLeft: 6,
+    fontSize: 12,
+    color: "#4B5563",
   },
   emptyRecordState: {
     alignItems: "center",
@@ -948,46 +1251,87 @@ const styles = StyleSheet.create({
   },
   emptyRecordText: {
     marginTop: 10,
-    color: "#888",
+    color: "#9CA3AF",
+    fontSize: 13,
   },
-  recordsList: {
-    marginTop: 10,
+  recordsSearchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  recordsSearchInput: {
+    flex: 1,
+    marginLeft: 8,
+    fontSize: 14,
+    color: "#111827",
   },
   recordCard: {
     borderWidth: 1,
-    borderColor: "#E6E6E6",
-    borderRadius: 12,
-    padding: 12,
+    borderColor: "#E5E7EB",
+    borderRadius: 16,
+    padding: 14,
     marginBottom: 12,
-    backgroundColor: "#FAFAFA",
+    backgroundColor: "#FFF",
   },
-  recordHeader: {
+  recordTopRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 6,
+    alignItems: "center",
   },
   recordTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
-    color: "#222",
+    color: "#111827",
   },
-  recordDate: {
+  recordDateChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  recordDateText: {
+    marginLeft: 4,
     fontSize: 12,
-    color: "#777",
+    fontWeight: "600",
+    color: "#047857",
   },
-  recordDentist: {
-    fontSize: 13,
-    color: "#555",
-    marginBottom: 2,
+  recordMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 10,
   },
-  recordTreatment: {
-    fontSize: 13,
-    color: "#555",
+  recordMetaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginRight: 16,
     marginBottom: 6,
+  },
+  recordMetaText: {
+    marginLeft: 6,
+    fontSize: 13,
+    color: "#4B5563",
   },
   recordNotes: {
     fontSize: 13,
-    color: "#444",
+    color: "#374151",
     lineHeight: 18,
+    marginTop: 8,
+  },
+  viewRecordButton: {
+    marginTop: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  viewRecordButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0F766E",
   },
 });

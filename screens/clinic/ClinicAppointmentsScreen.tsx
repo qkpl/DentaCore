@@ -13,7 +13,11 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
-import { Appointment, StaffMember } from "../../data/mockData";
+import type {
+  Appointment,
+  PaymentMethod,
+  StaffMember,
+} from "../../data/mockData";
 import {
   assignDentistToAppointment,
   getAppointmentsByClinic,
@@ -223,6 +227,25 @@ export default function ClinicAppointmentsScreen({
 
     const trimmed = name.trim();
     return trimmed.toLowerCase().startsWith("dr.") ? trimmed : `Dr. ${trimmed}`;
+  };
+
+  const formatPaymentMethod = (method?: PaymentMethod) => {
+    if (!method) {
+      return "N/A";
+    }
+    return method.toUpperCase();
+  };
+
+  const paymentStatusColors: Record<string, string> = {
+    paid: "#4CAF50",
+    pending: "#F9A825",
+    refunded: "#0288D1",
+    failed: "#E53935",
+  };
+
+  const getPaymentColor = (status?: string) => {
+    if (!status) return "#9E9E9E";
+    return paymentStatusColors[status] || "#9E9E9E";
   };
 
   const filteredAppointments = appointments.filter((apt) => {
@@ -527,6 +550,39 @@ export default function ClinicAppointmentsScreen({
                       {formatDentistName(appointment.dentistName)}
                     </Text>
                   </View>
+                </View>
+
+                <View style={styles.paymentRow}>
+                  <View
+                    style={[
+                      styles.paymentStatusPill,
+                      {
+                        backgroundColor: `${getPaymentColor(appointment.paymentStatus)}1A`,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="cash-outline"
+                      size={16}
+                      color={getPaymentColor(appointment.paymentStatus)}
+                    />
+                    <Text
+                      style={[
+                        styles.paymentStatusText,
+                        { color: getPaymentColor(appointment.paymentStatus) },
+                      ]}
+                    >
+                      {appointment.paymentStatus
+                        ? appointment.paymentStatus.toUpperCase()
+                        : "NO PAYMENT"}
+                    </Text>
+                  </View>
+                  <Text style={styles.paymentMethodText}>
+                    {formatPaymentMethod(appointment.paymentMethod)}
+                    {appointment.transactionId
+                      ? ` · Ref ${appointment.transactionId}`
+                      : ""}
+                  </Text>
                 </View>
 
                 {canModifyDentist(appointment.status) && (
@@ -919,6 +975,28 @@ const styles = StyleSheet.create({
   metaChipText: {
     fontSize: 13,
     color: "#444",
+  },
+  paymentRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  paymentStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  paymentStatusText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  paymentMethodText: {
+    fontSize: 12,
+    color: "#555",
   },
   assignRow: {
     flexDirection: "row",

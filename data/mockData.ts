@@ -9,6 +9,8 @@ export interface User {
   password: string;
   clinicId?: string; // Only for clinic users
   address?: string;
+  managedClinicIds?: string[];
+  managedPatientIds?: string[];
 }
 
 export interface Clinic {
@@ -40,6 +42,9 @@ export interface Clinic {
   lastLoginDate?: string; // Track when clinic last logged in
 }
 
+export type PaymentMethod = "card" | "gcash" | "paypal";
+export type PaymentStatus = "pending" | "paid" | "refunded" | "failed";
+
 export interface Appointment {
   id: string;
   patientId: string;
@@ -51,6 +56,10 @@ export interface Appointment {
   time: string;
   type: string;
   status: "pending" | "confirmed" | "completed" | "cancelled";
+  paymentMethod?: PaymentMethod;
+  paymentStatus?: PaymentStatus;
+  transactionId?: string;
+  cancellationReason?: string;
 }
 
 export interface DentalRecord {
@@ -121,6 +130,8 @@ export const mockUsers: User[] = [
     phone: "+1 (555) 999-0000",
     role: "admin",
     password: "admin123",
+    managedClinicIds: ["clinic1", "clinic2", "clinic3", "clinic4"],
+    managedPatientIds: ["patient1", "patient2"],
   },
 ];
 
@@ -257,6 +268,9 @@ export const mockAppointments: Appointment[] = [
     time: "10:00 AM",
     type: "Dental Cleaning",
     status: "confirmed",
+    paymentMethod: "card",
+    paymentStatus: "paid",
+    transactionId: "TX-APT1",
   },
   {
     id: "apt2",
@@ -269,6 +283,9 @@ export const mockAppointments: Appointment[] = [
     time: "2:00 PM",
     type: "Checkup",
     status: "pending",
+    paymentMethod: "gcash",
+    paymentStatus: "pending",
+    transactionId: "TX-APT2",
   },
   {
     id: "apt3",
@@ -281,6 +298,9 @@ export const mockAppointments: Appointment[] = [
     time: "11:30 AM",
     type: "Filling",
     status: "completed",
+    paymentMethod: "paypal",
+    paymentStatus: "paid",
+    transactionId: "TX-APT3",
   },
   {
     id: "apt4",
@@ -293,6 +313,9 @@ export const mockAppointments: Appointment[] = [
     time: "10:00 AM",
     type: "Teeth Cleaning",
     status: "confirmed",
+    paymentMethod: "card",
+    paymentStatus: "paid",
+    transactionId: "TX-APT4",
   },
   {
     id: "apt5",
@@ -305,6 +328,9 @@ export const mockAppointments: Appointment[] = [
     time: "11:30 AM",
     type: "Checkup",
     status: "pending",
+    paymentMethod: "gcash",
+    paymentStatus: "pending",
+    transactionId: "TX-APT5",
   },
   {
     id: "apt6",
@@ -317,6 +343,9 @@ export const mockAppointments: Appointment[] = [
     time: "2:00 PM",
     type: "Extraction",
     status: "completed",
+    paymentMethod: "paypal",
+    paymentStatus: "paid",
+    transactionId: "TX-APT6",
   },
 ];
 

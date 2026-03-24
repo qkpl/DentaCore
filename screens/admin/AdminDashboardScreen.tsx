@@ -1,18 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
-import React from "react";
+import { useEffect, useState } from "react";
 import {
-    Dimensions,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Dimensions,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import {
-    getAllClinics,
-    getAllUsers,
-    getSystemStats,
+  getAdminAnalyticsReport,
+  getAllClinics,
+  getRecentTransactions,
+  refreshClinicsFromFirestore,
+  refreshUsersFromFirestore,
+  syncAppointmentsFromFirestore,
 } from "../../services/dataService";
 
 const { width } = Dimensions.get("window");
@@ -25,14 +28,51 @@ export default function AdminDashboardScreen({
   navigation,
 }: AdminDashboardScreenProps) {
   const { user } = useAuth();
-  const stats = getSystemStats();
-  const clinics = getAllClinics();
-  const users = getAllUsers();
-
-  const forecastGrowthRate = 0.12; // 12% forecast growth
-  const predictedRevenue = Math.round(
-    stats.totalRevenue * (1 + forecastGrowthRate),
+  const [analytics, setAnalytics] = useState(getAdminAnalyticsReport());
+  const [clinics, setClinics] = useState(getAllClinics());
+  const [transactions, setTransactions] = useState(getRecentTransactions());
+  const [isSyncing, setIsSyncing] = useState(false);
+  const stats = analytics.totals;
+  const revenueGrowthPercentage = (analytics.revenueGrowthRate * 100).toFixed(
+    1,
   );
+  const predictedRevenue = analytics.predictedRevenueNextMonth;
+  const trendMax =
+    analytics.monthlyRevenueTrend.reduce<number>(
+      (max, point) => Math.max(max, point.value),
+      0,
+    ) || 1;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const hydrateAdminData = async () => {
+      setIsSyncing(true);
+      try {
+        await Promise.all([
+          refreshClinicsFromFirestore(),
+          refreshUsersFromFirestore(),
+          syncAppointmentsFromFirestore(),
+        ]);
+        if (!isMounted) {
+          return;
+        }
+        setClinics([...getAllClinics()]);
+        setAnalytics(getAdminAnalyticsReport());
+        setTransactions(getRecentTransactions());
+      } finally {
+        if (isMounted) {
+          setIsSyncing(false);
+        }
+      }
+    };
+
+    hydrateAdminData();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   return (
     <ScrollView style={styles.container}>
@@ -49,18 +89,21 @@ export default function AdminDashboardScreen({
           <Ionicons name="settings" size={28} color="#7C4DFF" />
         </TouchableOpacity>
       </View>
+      {isSyncing && (
+        <Text style={styles.syncText}>Syncing latest clinics & patients…</Text>
+      )}
 
       {/* Stats Overview */}
       <View style={styles.statsGrid}>
         <View style={[styles.statCard, { backgroundColor: "#7C4DFF" }]}>
           <Ionicons name="business" size={32} color="#FFF" />
-          <Text style={styles.statValue}>{stats.totalClinics}</Text>
+          <Text style={styles.statValue}>{stats.clinics}</Text>
           <Text style={styles.statLabel}>Total Clinics</Text>
         </View>
 
         <View style={[styles.statCard, { backgroundColor: "#00BFA6" }]}>
           <Ionicons name="people" size={32} color="#FFF" />
-          <Text style={styles.statValue}>{stats.totalPatients}</Text>
+          <Text style={styles.statValue}>{stats.patients}</Text>
           <Text style={styles.statLabel}>Total Patients</Text>
         </View>
       </View>
@@ -68,14 +111,14 @@ export default function AdminDashboardScreen({
       <View style={styles.statsGrid}>
         <View style={[styles.statCard, { backgroundColor: "#2196F3" }]}>
           <Ionicons name="calendar" size={32} color="#FFF" />
-          <Text style={styles.statValue}>{stats.totalAppointments}</Text>
+          <Text style={styles.statValue}>{stats.appointments}</Text>
           <Text style={styles.statLabel}>Appointments</Text>
         </View>
 
         <View style={[styles.statCard, { backgroundColor: "#4CAF50" }]}>
           <Ionicons name="cash" size={32} color="#FFF" />
           <Text style={styles.statValue}>
-            ₱{(stats.totalRevenue / 1000).toFixed(1)}K
+            ₱{(stats.revenue / 1000).toFixed(1)}K
           </Text>
           <Text style={styles.statLabel}>Total Revenue</Text>
         </View>
@@ -87,41 +130,30 @@ export default function AdminDashboardScreen({
         <View style={styles.trendCard}>
           <View style={styles.trendHeader}>
             <Text style={styles.trendValue}>
-              ₱{stats.totalRevenue.toLocaleString()}
+              ₱{stats.revenue.toLocaleString()}
             </Text>
             <View style={styles.trendBadge}>
               <Ionicons name="trending-up" size={16} color="#4CAF50" />
-              <Text style={styles.trendPercentage}>+18.7%</Text>
+              <Text style={styles.trendPercentage}>
+                +{revenueGrowthPercentage}%
+              </Text>
             </View>
           </View>
-          <Text style={styles.trendSubtext}>This month vs last month</Text>
+          <Text style={styles.trendSubtext}>
+            Revenue movement vs last month
+          </Text>
           <View style={styles.chartBox}>
-            <Text style={styles.chartTitle}>Monthly revenue trend</Text>
+            <Text style={styles.chartTitle}>Last 6 months</Text>
             <View style={styles.chartContainer}>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "60%" }]} />
-                <Text style={styles.barLabel}>Jan</Text>
-              </View>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "70%" }]} />
-                <Text style={styles.barLabel}>Feb</Text>
-              </View>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "80%" }]} />
-                <Text style={styles.barLabel}>Mar</Text>
-              </View>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "75%" }]} />
-                <Text style={styles.barLabel}>Apr</Text>
-              </View>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "90%" }]} />
-                <Text style={styles.barLabel}>May</Text>
-              </View>
-              <View style={styles.chartBar}>
-                <View style={[styles.bar, { height: "95%" }]} />
-                <Text style={styles.barLabel}>Jun</Text>
-              </View>
+              {analytics.monthlyRevenueTrend.map((point) => {
+                const barHeight = Math.max(12, (point.value / trendMax) * 100);
+                return (
+                  <View key={point.label} style={styles.chartBar}>
+                    <View style={[styles.bar, { height: `${barHeight}%` }]} />
+                    <Text style={styles.barLabel}>{point.label}</Text>
+                  </View>
+                );
+              })}
             </View>
           </View>
         </View>
@@ -131,14 +163,42 @@ export default function AdminDashboardScreen({
         <View style={styles.predictionCardOuter}>
           <View style={styles.predictionRow}>
             <Text style={styles.predictionLabel}>Revenue Prediction</Text>
-            <Text style={styles.predictionValue}>+12% forecast</Text>
+            <Text style={styles.predictionValue}>
+              +{revenueGrowthPercentage}% trend
+            </Text>
           </View>
           <Text style={styles.predictionRevenue}>
             ₱{predictedRevenue.toLocaleString()} predicted next month
           </Text>
           <Text style={styles.predictionNote}>
-            Based on current trend and growth projections.
+            Tracking {stats.activeClinics} active clinics across{" "}
+            {stats.appointments} appointments.
           </Text>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Operational Insights</Text>
+        <View style={styles.insightsRow}>
+          <View style={styles.insightCard}>
+            <Text style={styles.insightLabel}>Avg. Appointment Value</Text>
+            <Text style={styles.insightValue}>
+              ₱{analytics.avgAppointmentValue.toLocaleString()}
+            </Text>
+            <Text style={styles.insightDelta}>Based on recent bookings</Text>
+          </View>
+          <View style={styles.insightCard}>
+            <Text style={styles.insightLabel}>Conversion Rate</Text>
+            <Text style={styles.insightValue}>{analytics.conversionRate}%</Text>
+            <Text style={styles.insightDelta}>Confirmed + completed</Text>
+          </View>
+          <View style={styles.insightCard}>
+            <Text style={styles.insightLabel}>Cancellation Rate</Text>
+            <Text style={styles.insightValue}>
+              {analytics.cancellationRate}%
+            </Text>
+            <Text style={styles.insightDelta}>Across all appointments</Text>
+          </View>
         </View>
       </View>
 
@@ -186,6 +246,45 @@ export default function AdminDashboardScreen({
             <Text style={styles.actionText}>Settings</Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Payments</Text>
+          <Text style={styles.viewAllText}>Live</Text>
+        </View>
+        {transactions.length === 0 ? (
+          <Text style={styles.emptyText}>No recent payments recorded.</Text>
+        ) : (
+          transactions.map((transaction) => (
+            <View key={transaction.id} style={styles.transactionCard}>
+              <View style={styles.transactionRow}>
+                <View style={styles.transactionIcon}>
+                  <Ionicons name="card" size={18} color="#7C4DFF" />
+                </View>
+                <View style={styles.transactionDetails}>
+                  <Text style={styles.transactionPrimary}>
+                    {transaction.patientName}
+                  </Text>
+                  <Text style={styles.transactionSecondary}>
+                    {transaction.clinicName} · {transaction.date}{" "}
+                    {transaction.time}
+                  </Text>
+                  <Text style={styles.transactionMeta}>
+                    Paid via {transaction.paymentMethod?.toUpperCase() || "N/A"}
+                    {transaction.transactionId
+                      ? ` · Ref ${transaction.transactionId}`
+                      : ""}
+                  </Text>
+                </View>
+                <View style={styles.paymentBadge}>
+                  <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                  <Text style={styles.paymentBadgeText}>Paid</Text>
+                </View>
+              </View>
+            </View>
+          ))
+        )}
       </View>
 
       {/* Top Performing Clinics */}
@@ -268,6 +367,14 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
   },
+  syncText: {
+    textAlign: "center",
+    color: "#7C4DFF",
+    fontWeight: "600",
+    fontSize: 12,
+    marginTop: -8,
+    marginBottom: 12,
+  },
   userName: {
     fontSize: 24,
     fontWeight: "bold",
@@ -325,6 +432,68 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: "#7C4DFF",
   },
+  emptyText: {
+    color: "#777",
+    marginTop: 4,
+  },
+  transactionCard: {
+    backgroundColor: "#FFF",
+    padding: 14,
+    borderRadius: 16,
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  transactionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  transactionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F3ECFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  transactionDetails: {
+    flex: 1,
+    gap: 2,
+  },
+  transactionPrimary: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#222",
+  },
+  transactionSecondary: {
+    fontSize: 13,
+    color: "#555",
+  },
+  transactionMeta: {
+    fontSize: 12,
+    color: "#7C4DFF",
+  },
+  paymentBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#4CAF50",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    gap: 6,
+  },
+  paymentBadgeText: {
+    color: "#FFF",
+    fontWeight: "700",
+    fontSize: 12,
+  },
   predictionCard: {
     marginTop: 12,
     backgroundColor: "#E8F5E9",
@@ -376,6 +545,41 @@ const styles = StyleSheet.create({
     height: 130,
     marginTop: 12,
     paddingTop: 8,
+  },
+  insightsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 14,
+  },
+  insightCard: {
+    flex: 1,
+    minWidth: (width - 60) / 2,
+    backgroundColor: "#FFF",
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#F0F0F0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  insightLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#666",
+  },
+  insightValue: {
+    fontSize: 22,
+    fontWeight: "bold",
+    color: "#212121",
+    marginTop: 8,
+  },
+  insightDelta: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#7C7C7C",
   },
   predictionContainer: {
     marginTop: 12,

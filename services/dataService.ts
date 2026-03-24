@@ -1,28 +1,30 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-    addDoc,
-    collection,
-    deleteDoc,
-    doc,
-    DocumentData,
-    getDocs,
-    query,
-    QueryDocumentSnapshot,
-    setDoc,
-    updateDoc,
-    where,
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  DocumentData,
+  getDocs,
+  query,
+  QueryDocumentSnapshot,
+  setDoc,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import {
-    Appointment,
-    Clinic,
-    DentalRecord,
-    mockAppointments,
-    mockClinics,
-    mockDentalRecords,
-    mockStaffMembers,
-    mockUsers,
-    StaffMember,
-    User,
+  Appointment,
+  Clinic,
+  DentalRecord,
+  mockAppointments,
+  mockClinics,
+  mockDentalRecords,
+  mockStaffMembers,
+  mockUsers,
+  PaymentMethod,
+  PaymentStatus,
+  StaffMember,
+  User,
 } from "../data/mockData";
 import { db } from "./firebase";
 
@@ -35,6 +37,8 @@ type FirestoreDentalRecord = Partial<
 
 const appointmentsCollection = collection(db, "appointments");
 const patientRecordsCollection = collection(db, "patientRecords");
+const clinicsCollection = collection(db, "clinics");
+const usersCollection = collection(db, "users");
 const LOCAL_RECORDS_KEY = "dentacore/localDentalRecords";
 let localRecordsCache: DentalRecord[] | null = null;
 
@@ -76,6 +80,29 @@ const replaceAppointmentsCache = (appointments: Appointment[]) => {
   mockAppointments.splice(0, mockAppointments.length, ...appointments);
 };
 
+const replaceClinicsCache = (clinics: Clinic[]) => {
+  mockClinics.splice(0, mockClinics.length, ...clinics);
+};
+
+const replaceUsersCache = (users: User[]) => {
+  mockUsers.splice(0, mockUsers.length, ...users);
+  syncAdminRelationships();
+};
+
+export const syncAdminRelationships = (): void => {
+  const clinicIds = mockClinics.map((clinic) => clinic.id);
+  const patientIds = mockUsers
+    .filter((user) => user.role === "patient")
+    .map((user) => user.id);
+
+  mockUsers
+    .filter((user) => user.role === "admin")
+    .forEach((admin) => {
+      admin.managedClinicIds = clinicIds;
+      admin.managedPatientIds = patientIds;
+    });
+};
+
 const filterLocalRecords = async (
   predicate: (record: DentalRecord) => boolean,
 ): Promise<DentalRecord[]> => {
@@ -93,6 +120,78 @@ const appointmentStatuses: Appointment["status"][] = [
   "cancelled",
 ];
 
+const paymentMethods: PaymentMethod[] = ["card", "gcash", "paypal"];
+const paymentStatuses: PaymentStatus[] = [
+  "pending",
+  "paid",
+  "refunded",
+  "failed",
+];
+
+const appointmentPriceLookup: Record<string, number> = {
+  "dental cleaning": 2800,
+  checkup: 1800,
+  "root canal": 7200,
+  "dental checkup": 1800,
+  "teeth whitening": 4200,
+  orthodontics: 9500,
+  filling: 3200,
+  extraction: 3500,
+  implants: 12500,
+  "cosmetic dentistry": 6800,
+  "general dentistry": 2500,
+};
+
+const monthNames = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+const defaultOperatingHours = {
+  monday: "9:00 AM - 5:00 PM",
+  tuesday: "9:00 AM - 5:00 PM",
+  wednesday: "9:00 AM - 5:00 PM",
+  thursday: "9:00 AM - 5:00 PM",
+  friday: "9:00 AM - 5:00 PM",
+  saturday: "Closed",
+  sunday: "Closed",
+};
+
+const estimateAppointmentValue = (appointment: Appointment): number => {
+  const key = appointment.type.toLowerCase();
+  const base = appointmentPriceLookup[key] ?? 2600;
+
+  switch (appointment.status) {
+    case "completed":
+      return base;
+    case "confirmed":
+      return base * 0.95;
+    case "pending":
+      return base * 0.75;
+    case "cancelled":
+      return base * 0.2;
+    default:
+      return base;
+  }
+};
+
+const formatMonthLabel = (monthKey: string): string => {
+  const [year, month] = monthKey.split("-");
+  const monthIndex = Number(month) - 1;
+  const label = monthNames[Math.max(0, Math.min(11, monthIndex))];
+  return `${label} ${year.slice(-2)}`;
+};
+
 const parseAppointmentStatus = (value: unknown): Appointment["status"] => {
   if (typeof value === "string") {
     const normalized = value.toLowerCase();
@@ -102,6 +201,28 @@ const parseAppointmentStatus = (value: unknown): Appointment["status"] => {
     }
   }
   return "pending";
+};
+
+const parsePaymentStatus = (value: unknown): PaymentStatus => {
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    const status = paymentStatuses.find((item) => item === normalized);
+    if (status) {
+      return status;
+    }
+  }
+  return "pending";
+};
+
+const parsePaymentMethod = (value: unknown): PaymentMethod | undefined => {
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase();
+    const method = paymentMethods.find((item) => item === normalized);
+    if (method) {
+      return method;
+    }
+  }
+  return undefined;
 };
 
 const mapFirestoreRecord = (
@@ -137,6 +258,96 @@ const mapFirestoreAppointment = (
     time: safeString(data.time),
     type: safeString(data.type),
     status: parseAppointmentStatus(data.status),
+    paymentMethod: parsePaymentMethod(data.paymentMethod),
+    paymentStatus: parsePaymentStatus(data.paymentStatus),
+    transactionId: safeString(data.transactionId),
+  };
+};
+
+const safeNumber = (value: unknown, fallback = 0): number => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return fallback;
+};
+
+const mapFirestoreClinic = (
+  snapshot: QueryDocumentSnapshot<DocumentData>,
+): Clinic => {
+  const data = snapshot.data() as Partial<Clinic>;
+  const operatingHours = data.operatingHours || {};
+  return {
+    id: data.id || snapshot.id,
+    name: safeString(data.name) || "Unnamed Clinic",
+    address: safeString(data.address) || "No address provided",
+    phone: safeString(data.phone),
+    email: safeString(data.email),
+    description: safeString(data.description) || "Clinic",
+    servicesOffered: Array.isArray(data.servicesOffered)
+      ? (data.servicesOffered as string[])
+      : [],
+    operatingHours: {
+      monday:
+        safeString((operatingHours as any)?.monday) ||
+        defaultOperatingHours.monday,
+      tuesday:
+        safeString((operatingHours as any)?.tuesday) ||
+        defaultOperatingHours.tuesday,
+      wednesday:
+        safeString((operatingHours as any)?.wednesday) ||
+        defaultOperatingHours.wednesday,
+      thursday:
+        safeString((operatingHours as any)?.thursday) ||
+        defaultOperatingHours.thursday,
+      friday:
+        safeString((operatingHours as any)?.friday) ||
+        defaultOperatingHours.friday,
+      saturday:
+        safeString((operatingHours as any)?.saturday) ||
+        defaultOperatingHours.saturday,
+      sunday:
+        safeString((operatingHours as any)?.sunday) ||
+        defaultOperatingHours.sunday,
+    },
+    rating: safeNumber((data as any)?.rating, 0),
+    totalPatients: safeNumber((data as any)?.totalPatients, 0),
+    todaysAppointments: safeNumber((data as any)?.todaysAppointments, 0),
+    revenue: safeNumber((data as any)?.revenue, 0),
+    location:
+      typeof data.location === "object" && data.location
+        ? data.location
+        : { lat: 0, lng: 0 },
+    isActive: Boolean(data.isActive),
+    lastLoginDate: data.lastLoginDate,
+  };
+};
+
+const normalizeUserRole = (role: unknown): User["role"] => {
+  if (role === "clinic" || role === "admin" || role === "patient") {
+    return role;
+  }
+  return "patient";
+};
+
+const mapFirestoreUser = (
+  snapshot: QueryDocumentSnapshot<DocumentData>,
+): User => {
+  const data = snapshot.data() as Partial<User>;
+  return {
+    id: data.id || snapshot.id,
+    name: safeString(data.name) || "New User",
+    email: safeString(data.email),
+    phone: safeString(data.phone),
+    role: normalizeUserRole(data.role),
+    password: safeString((data as any)?.password),
+    clinicId: safeString(data.clinicId) || undefined,
+    address: safeString(data.address) || undefined,
+    managedClinicIds: Array.isArray(data.managedClinicIds)
+      ? (data.managedClinicIds as string[])
+      : undefined,
+    managedPatientIds: Array.isArray(data.managedPatientIds)
+      ? (data.managedPatientIds as string[])
+      : undefined,
   };
 };
 
@@ -180,6 +391,42 @@ export const syncAppointmentsFromFirestore = async (): Promise<void> => {
   } catch (error) {
     console.warn("Failed to sync appointments from Firestore", error);
   }
+};
+
+syncAdminRelationships();
+
+export const refreshClinicsFromFirestore = async (): Promise<Clinic[]> => {
+  try {
+    const snapshot = await getDocs(clinicsCollection);
+    if (!snapshot.empty) {
+      const fetchedClinics = snapshot.docs.map(mapFirestoreClinic);
+      replaceClinicsCache(fetchedClinics);
+      syncAdminRelationships();
+    }
+  } catch (error) {
+    console.warn("Failed to sync clinics from Firestore", error);
+  }
+
+  return [...mockClinics];
+};
+
+export const refreshUsersFromFirestore = async (): Promise<User[]> => {
+  try {
+    const snapshot = await getDocs(usersCollection);
+    if (!snapshot.empty) {
+      const fetchedUsers = snapshot.docs.map(mapFirestoreUser);
+      const existingAdmins = mockUsers.filter((user) => user.role === "admin");
+      const hasAdmin = fetchedUsers.some((user) => user.role === "admin");
+      const mergedUsers = hasAdmin
+        ? fetchedUsers
+        : [...fetchedUsers, ...existingAdmins];
+      replaceUsersCache(mergedUsers);
+    }
+  } catch (error) {
+    console.warn("Failed to sync users from Firestore", error);
+  }
+
+  return [...mockUsers];
 };
 
 // Clinic Services ----------------------------------------------------------
@@ -276,6 +523,7 @@ export const deleteClinic = (clinicId: string): boolean => {
       .reverse();
 
     appointmentIndexes.forEach((idx) => mockAppointments.splice(idx, 1));
+    syncAdminRelationships();
     return true;
   }
   return false;
@@ -309,6 +557,40 @@ export const createAppointment = (
     console.warn("Failed to persist appointment to Firestore", error);
   });
   return newAppointment;
+};
+
+const sortAppointmentsByDateTimeDesc = (
+  appointments: Appointment[],
+): Appointment[] => {
+  return [...appointments].sort((a, b) => {
+    const aKey = `${a.date ?? ""} ${a.time ?? ""}`;
+    const bKey = `${b.date ?? ""} ${b.time ?? ""}`;
+    return bKey.localeCompare(aKey);
+  });
+};
+
+const filterPaidOrWithMethod = (appointments: Appointment[]): Appointment[] => {
+  const paid = appointments.filter((apt) => apt.paymentStatus === "paid");
+  if (paid.length > 0) {
+    return paid;
+  }
+  return appointments.filter((apt) => Boolean(apt.paymentMethod));
+};
+
+export const getRecentTransactions = (limit = 6): Appointment[] => {
+  const source = filterPaidOrWithMethod(mockAppointments);
+  return sortAppointmentsByDateTimeDesc(source).slice(0, limit);
+};
+
+export const getClinicTransactions = (
+  clinicId: string,
+  limit = 6,
+): Appointment[] => {
+  const clinicAppointments = mockAppointments.filter(
+    (apt) => apt.clinicId === clinicId,
+  );
+  const source = filterPaidOrWithMethod(clinicAppointments);
+  return sortAppointmentsByDateTimeDesc(source).slice(0, limit);
 };
 
 export const updateAppointmentStatus = async (
@@ -426,6 +708,28 @@ export const deleteAppointment = (appointmentId: string): boolean => {
     return true;
   }
   return false;
+};
+
+export const cancelAppointment = (
+  appointmentId: string,
+  reason = "Cancelled by patient",
+): boolean => {
+  const appointment = mockAppointments.find((apt) => apt.id === appointmentId);
+  if (!appointment) {
+    return false;
+  }
+
+  appointment.status = "cancelled";
+  appointment.cancellationReason = reason;
+
+  void updateDoc(doc(db, "appointments", appointmentId), {
+    status: "cancelled",
+    cancellationReason: reason,
+  }).catch((error) => {
+    console.warn("Failed to cancel appointment in Firestore", error);
+  });
+
+  return true;
 };
 
 // Dental Record Services ---------------------------------------------------
@@ -570,6 +874,7 @@ export const deleteUser = (userId: string): boolean => {
       .reverse();
 
     appointmentIndexes.forEach((idx) => mockAppointments.splice(idx, 1));
+    syncAdminRelationships();
     return true;
   }
   return false;
@@ -577,12 +882,233 @@ export const deleteUser = (userId: string): boolean => {
 
 // Analytics Services -------------------------------------------------------
 
-export const getSystemStats = () => {
+export interface AdminLinkedEntities {
+  clinics: Clinic[];
+  clinicUsers: User[];
+  patients: User[];
+}
+
+interface StatusSummary {
+  status: Appointment["status"];
+  count: number;
+  percentage: number;
+}
+
+interface PaymentSummary {
+  method: PaymentMethod;
+  count: number;
+  percentage: number;
+}
+
+interface RevenueByClinicSummary {
+  clinicId: string;
+  clinicName: string;
+  revenue: number;
+  percentage: number;
+}
+
+interface MonthlyRevenuePoint {
+  label: string;
+  value: number;
+}
+
+export interface AdminAnalyticsReport {
+  totals: {
+    clinics: number;
+    patients: number;
+    appointments: number;
+    revenue: number;
+    activeClinics: number;
+  };
+  appointmentStatusSummary: StatusSummary[];
+  paymentMethodSummary: PaymentSummary[];
+  revenueByClinic: RevenueByClinicSummary[];
+  monthlyRevenueTrend: MonthlyRevenuePoint[];
+  revenueGrowthRate: number;
+  predictedRevenueNextMonth: number;
+  avgAppointmentValue: number;
+  conversionRate: number;
+  cancellationRate: number;
+}
+
+const buildMonthlyRevenueTrend = (
+  totalRevenue: number,
+): MonthlyRevenuePoint[] => {
+  const buckets: Record<string, number> = {};
+
+  mockAppointments.forEach((appointment) => {
+    if (!appointment.date || appointment.date.length < 7) {
+      return;
+    }
+
+    const monthKey = appointment.date.slice(0, 7);
+    buckets[monthKey] =
+      (buckets[monthKey] ?? 0) + estimateAppointmentValue(appointment);
+  });
+
+  const sortedKeys = Object.keys(buckets).sort();
+  const trimmed = sortedKeys.slice(-6);
+  let points = trimmed.map((key) => ({
+    label: formatMonthLabel(key),
+    value: Math.round(buckets[key]),
+  }));
+
+  if (points.length === 0) {
+    const baseline = totalRevenue / 6 || 15000;
+    const now = new Date();
+    points = Array.from({ length: 6 }, (_, idx) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (5 - idx), 1);
+      const label = `${monthNames[date.getMonth()]} ${String(date.getFullYear()).slice(-2)}`;
+      return {
+        label,
+        value: Math.round(baseline * (0.7 + idx * 0.05)),
+      };
+    });
+  }
+
+  return points;
+};
+
+export const getAdminLinkedEntities = (): AdminLinkedEntities => {
+  syncAdminRelationships();
+
   return {
-    totalClinics: mockClinics.length,
-    totalPatients: mockUsers.filter((u) => u.role === "patient").length,
-    totalAppointments: mockAppointments.length,
-    totalRevenue: mockClinics.reduce((sum, clinic) => sum + clinic.revenue, 0),
+    clinics: mockClinics,
+    clinicUsers: mockUsers.filter((user) => user.role === "clinic"),
+    patients: mockUsers.filter((user) => user.role === "patient"),
+  };
+};
+
+export const getAdminAnalyticsReport = (): AdminAnalyticsReport => {
+  const { clinics, patients } = getAdminLinkedEntities();
+  const appointments = [...mockAppointments];
+
+  const revenueByClinic: RevenueByClinicSummary[] = clinics.map((clinic) => ({
+    clinicId: clinic.id,
+    clinicName: clinic.name,
+    revenue: clinic.revenue,
+    percentage: 0,
+  }));
+
+  const clinicRevenueTotal = revenueByClinic.reduce(
+    (sum, item) => sum + item.revenue,
+    0,
+  );
+
+  const appointmentRevenueTotal = appointments.reduce(
+    (sum, appointment) => sum + estimateAppointmentValue(appointment),
+    0,
+  );
+
+  const totalRevenue = Math.max(clinicRevenueTotal, appointmentRevenueTotal);
+
+  revenueByClinic.forEach((entry) => {
+    entry.percentage = totalRevenue
+      ? Number(((entry.revenue / totalRevenue) * 100).toFixed(1))
+      : 0;
+  });
+
+  const appointmentStatusSummary: StatusSummary[] = appointmentStatuses.map(
+    (status) => {
+      const count = appointments.filter((a) => a.status === status).length;
+      const percentage = appointments.length
+        ? Number(((count / appointments.length) * 100).toFixed(1))
+        : 0;
+      return { status, count, percentage };
+    },
+  );
+
+  const paymentMethodSummary: PaymentSummary[] = paymentMethods.map(
+    (method) => {
+      const count = appointments.filter(
+        (apt) => apt.paymentMethod === method,
+      ).length;
+      return { method, count, percentage: 0 };
+    },
+  );
+
+  const totalPaymentCount = paymentMethodSummary.reduce(
+    (sum, entry) => sum + entry.count,
+    0,
+  );
+
+  paymentMethodSummary.forEach((entry) => {
+    entry.percentage = totalPaymentCount
+      ? Number(((entry.count / totalPaymentCount) * 100).toFixed(1))
+      : 0;
+  });
+
+  const monthlyRevenueTrend = buildMonthlyRevenueTrend(totalRevenue);
+  const lastValue =
+    monthlyRevenueTrend.length > 0
+      ? monthlyRevenueTrend[monthlyRevenueTrend.length - 1].value
+      : totalRevenue / 6;
+  const prevValue =
+    monthlyRevenueTrend.length > 1
+      ? monthlyRevenueTrend[monthlyRevenueTrend.length - 2].value
+      : lastValue;
+
+  const rawGrowthRate =
+    prevValue > 0 ? (lastValue - prevValue) / prevValue : 0.12;
+  const revenueGrowthRate = Number(rawGrowthRate.toFixed(3));
+  const predictedRevenueNextMonth = Math.round(
+    lastValue * (1 + Math.max(0.05, rawGrowthRate)),
+  );
+
+  const avgAppointmentValue = appointments.length
+    ? Math.round(appointmentRevenueTotal / appointments.length)
+    : 0;
+
+  const confirmedCount = appointments.filter(
+    (a) => a.status === "confirmed",
+  ).length;
+  const completedCount = appointments.filter(
+    (a) => a.status === "completed",
+  ).length;
+  const cancelledCount = appointments.filter(
+    (a) => a.status === "cancelled",
+  ).length;
+
+  const conversionRate = appointments.length
+    ? Number(
+        (
+          ((confirmedCount + completedCount) / appointments.length) *
+          100
+        ).toFixed(1),
+      )
+    : 0;
+
+  const cancellationRate = appointments.length
+    ? Number(((cancelledCount / appointments.length) * 100).toFixed(1))
+    : 0;
+
+  return {
+    totals: {
+      clinics: clinics.length,
+      patients: patients.length,
+      appointments: appointments.length,
+      revenue: totalRevenue,
+      activeClinics: clinics.filter((clinic) => clinic.isActive).length,
+    },
+    appointmentStatusSummary,
+    paymentMethodSummary,
+    revenueByClinic,
+    monthlyRevenueTrend,
+    revenueGrowthRate,
+    predictedRevenueNextMonth,
+    avgAppointmentValue,
+    conversionRate,
+    cancellationRate,
+  };
+};
+
+export const getSystemStats = () => {
+  const analytics = getAdminAnalyticsReport();
+  return {
+    totalClinics: analytics.totals.clinics,
+    totalPatients: analytics.totals.patients,
+    totalAppointments: analytics.totals.appointments,
+    totalRevenue: analytics.totals.revenue,
   };
 };
 

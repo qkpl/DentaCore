@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     Alert,
     ScrollView,
@@ -9,7 +9,7 @@ import {
     View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
-import { Clinic } from "../../data/mockData";
+import { Clinic, PaymentMethod } from "../../data/mockData";
 import { createAppointment } from "../../services/dataService";
 
 interface BookAppointmentScreenProps {
@@ -17,7 +17,7 @@ interface BookAppointmentScreenProps {
   navigation: any;
 }
 
-const jsDayToOperatingDay: Array<keyof Clinic["operatingHours"]> = [
+const jsDayToOperatingDay: (keyof Clinic["operatingHours"])[] = [
   "sunday",
   "monday",
   "tuesday",
@@ -74,6 +74,45 @@ const buildTimeSlots = (operatingHours: string): string[] => {
   return slots;
 };
 
+const PAYMENT_OPTIONS: {
+  key: PaymentMethod;
+  label: string;
+  description: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  accent: string;
+  helper: string;
+}[] = [
+  {
+    key: "card",
+    label: "Credit / Debit Card",
+    description: "Visa, Mastercard, AMEX",
+    icon: "card-outline",
+    accent: "#2563EB",
+    helper: "Instant confirmation",
+  },
+  {
+    key: "gcash",
+    label: "GCash",
+    description: "Pay directly from your wallet",
+    icon: "wallet-outline",
+    accent: "#0EA5E9",
+    helper: "No extra fees",
+  },
+  {
+    key: "paypal",
+    label: "PayPal",
+    description: "Secure global checkout",
+    icon: "logo-paypal",
+    accent: "#0D9488",
+    helper: "Buyer protection",
+  },
+];
+
+const generateTransactionReference = (method: PaymentMethod): string => {
+  const prefix = method.slice(0, 2).toUpperCase();
+  return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+};
+
 export default function BookAppointmentScreen({
   route,
   navigation,
@@ -84,6 +123,16 @@ export default function BookAppointmentScreen({
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] =
+    useState<PaymentMethod | null>(null);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+
+  const selectedPaymentOption = useMemo(
+    () =>
+      PAYMENT_OPTIONS.find((option) => option.key === selectedPaymentMethod) ||
+      null,
+    [selectedPaymentMethod],
+  );
 
   const availableDates = useMemo(() => {
     const dates: string[] = [];
@@ -129,33 +178,49 @@ export default function BookAppointmentScreen({
       return;
     }
 
+    if (!selectedPaymentMethod) {
+      Alert.alert("Payment Required", "Please choose how you'd like to pay.");
+      return;
+    }
+
     if (!user) {
       Alert.alert("Error", "User not found");
       return;
     }
 
-    createAppointment({
-      patientId: user.id,
-      patientName: user.name,
-      clinicId: clinic.id,
-      clinicName: clinic.name,
-      dentistName: "Assigned Dentist",
-      date: selectedDate,
-      time: selectedTime,
-      type: selectedService,
-      status: "pending",
-    });
+    const transactionId = generateTransactionReference(selectedPaymentMethod);
+    const paymentLabel = selectedPaymentOption?.label || "your selected method";
 
-    Alert.alert(
-      "Success",
-      "Your appointment request has been submitted. The clinic will confirm shortly.",
-      [
-        {
-          text: "OK",
-          onPress: () => navigation.navigate("PatientHome"),
-        },
-      ],
-    );
+    setIsProcessingPayment(true);
+    try {
+      createAppointment({
+        patientId: user.id,
+        patientName: user.name,
+        clinicId: clinic.id,
+        clinicName: clinic.name,
+        dentistName: "Assigned Dentist",
+        date: selectedDate,
+        time: selectedTime,
+        type: selectedService,
+        status: "pending",
+        paymentMethod: selectedPaymentMethod,
+        paymentStatus: "paid",
+        transactionId,
+      });
+
+      Alert.alert(
+        "Payment Received",
+        `Your ${paymentLabel} payment was recorded (Ref: ${transactionId}). The clinic will confirm shortly.`,
+        [
+          {
+            text: "OK",
+            onPress: () => navigation.navigate("PatientHome"),
+          },
+        ],
+      );
+    } finally {
+      setIsProcessingPayment(false);
+    }
   };
 
   const formatDate = (dateString: string) => {
@@ -343,6 +408,70 @@ export default function BookAppointmentScreen({
           )}
         </View>
 
+        {/* Payment */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Payment Method</Text>
+          <View style={styles.paymentGrid}>
+            {PAYMENT_OPTIONS.map((option) => {
+              const isSelected = selectedPaymentMethod === option.key;
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={[
+                    styles.paymentCard,
+                    isSelected && styles.paymentCardSelected,
+                  ]}
+                  onPress={() => setSelectedPaymentMethod(option.key)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Pay with ${option.label}`}
+                >
+                  <View
+                    style={[
+                      styles.paymentIconBadge,
+                      { borderColor: option.accent },
+                      isSelected && { backgroundColor: option.accent },
+                    ]}
+                  >
+                    <Ionicons
+                      name={option.icon}
+                      size={20}
+                      color={isSelected ? "#FFF" : option.accent}
+                    />
+                  </View>
+                  <View style={styles.paymentCardBody}>
+                    <Text
+                      style={[
+                        styles.paymentTitle,
+                        isSelected && styles.paymentTitleSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    <Text style={styles.paymentSubtitle}>
+                      {option.description}
+                    </Text>
+                    <Text style={styles.paymentHelper}>{option.helper}</Text>
+                  </View>
+                  {isSelected && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={20}
+                      color="#00BFA6"
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          <View style={styles.paymentHint}>
+            <Ionicons name="shield-checkmark" size={16} color="#10B981" />
+            <Text style={styles.paymentHintText}>
+              Secure payments. Your transaction will be saved with the
+              appointment record.
+            </Text>
+          </View>
+        </View>
+
         {/* Summary */}
         {selectedService && selectedDate && selectedTime && (
           <View style={styles.summary}>
@@ -359,6 +488,21 @@ export default function BookAppointmentScreen({
               <Text style={styles.summaryLabel}>Time:</Text>
               <Text style={styles.summaryValue}>{selectedTime}</Text>
             </View>
+            {selectedPaymentOption ? (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Payment:</Text>
+                <View style={styles.paymentSummaryBadge}>
+                  <Ionicons
+                    name={selectedPaymentOption.icon}
+                    size={16}
+                    color={selectedPaymentOption.accent}
+                  />
+                  <Text style={styles.paymentSummaryText}>
+                    {selectedPaymentOption.label}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
           </View>
         )}
       </ScrollView>
@@ -368,13 +512,25 @@ export default function BookAppointmentScreen({
         <TouchableOpacity
           style={[
             styles.bookButton,
-            (!selectedService || !selectedDate || !selectedTime) &&
+            (!selectedService ||
+              !selectedDate ||
+              !selectedTime ||
+              !selectedPaymentMethod ||
+              isProcessingPayment) &&
               styles.bookButtonDisabled,
           ]}
           onPress={handleBookAppointment}
-          disabled={!selectedService || !selectedDate || !selectedTime}
+          disabled={
+            !selectedService ||
+            !selectedDate ||
+            !selectedTime ||
+            !selectedPaymentMethod ||
+            isProcessingPayment
+          }
         >
-          <Text style={styles.bookButtonText}>Confirm Booking</Text>
+          <Text style={styles.bookButtonText}>
+            {isProcessingPayment ? "Processing..." : "Confirm & Pay"}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -533,6 +689,68 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 10,
   },
+  paymentGrid: {
+    gap: 12,
+  },
+  paymentCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 2,
+    borderColor: "#E5E7EB",
+    gap: 14,
+  },
+  paymentCardSelected: {
+    borderColor: "#00BFA6",
+    backgroundColor: "#ECFDF5",
+  },
+  paymentIconBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+  },
+  paymentCardBody: {
+    flex: 1,
+  },
+  paymentTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  paymentTitleSelected: {
+    color: "#065F46",
+  },
+  paymentSubtitle: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  paymentHelper: {
+    fontSize: 12,
+    color: "#10B981",
+    marginTop: 4,
+    fontWeight: "500",
+  },
+  paymentHint: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#ECFDF5",
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+    gap: 8,
+  },
+  paymentHintText: {
+    flex: 1,
+    color: "#047857",
+    fontSize: 13,
+    lineHeight: 18,
+  },
   timeCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -575,6 +793,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     marginBottom: 8,
+  },
+  paymentSummaryBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFF",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    gap: 6,
+  },
+  paymentSummaryText: {
+    fontSize: 13,
+    color: "#1E3A8A",
+    fontWeight: "600",
   },
   summaryLabel: {
     fontSize: 14,

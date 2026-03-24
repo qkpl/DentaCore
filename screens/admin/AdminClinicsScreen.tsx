@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
     Alert,
     Modal,
@@ -14,6 +14,7 @@ import { Clinic } from "../../data/mockData";
 import {
     deleteClinic,
     getAllClinics,
+    refreshClinicsFromFirestore,
     updateClinic,
 } from "../../services/dataService";
 
@@ -28,6 +29,8 @@ export default function AdminClinicsScreen({
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [selectedClinic, setSelectedClinic] = useState<Clinic | null>(null);
+  const [clinics, setClinics] = useState<Clinic[]>(getAllClinics());
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // Form fields
   const [clinicName, setClinicName] = useState("");
@@ -35,7 +38,28 @@ export default function AdminClinicsScreen({
   const [clinicPhone, setClinicPhone] = useState("");
   const [clinicEmail, setClinicEmail] = useState("");
 
-  const clinics = getAllClinics();
+  useEffect(() => {
+    let isActive = true;
+    const fetchClinics = async () => {
+      setIsSyncing(true);
+      try {
+        const updatedClinics = await refreshClinicsFromFirestore();
+        if (isActive) {
+          setClinics([...updatedClinics]);
+        }
+      } finally {
+        if (isActive) {
+          setIsSyncing(false);
+        }
+      }
+    };
+
+    fetchClinics();
+
+    return () => {
+      isActive = false;
+    };
+  }, [refreshTrigger]);
 
   // Sync form fields with selected clinic
   useEffect(() => {
@@ -90,6 +114,7 @@ export default function AdminClinicsScreen({
       Alert.alert("Success", "Clinic updated successfully");
       setEditModalVisible(false);
       setSelectedClinic(null);
+      setClinics([...getAllClinics()]);
       setRefreshTrigger((prev) => prev + 1);
     } else {
       Alert.alert("Error", "Failed to update clinic");
@@ -109,6 +134,7 @@ export default function AdminClinicsScreen({
             const success = deleteClinic(clinic.id);
             if (success) {
               Alert.alert("Success", "Clinic deleted successfully");
+              setClinics([...getAllClinics()]);
               setRefreshTrigger((prev) => prev + 1);
             } else {
               Alert.alert("Error", "Failed to delete clinic");
@@ -150,6 +176,9 @@ export default function AdminClinicsScreen({
           onChangeText={setSearchQuery}
         />
       </View>
+      {isSyncing && (
+        <Text style={styles.syncText}>Fetching clinics from database…</Text>
+      )}
 
       {/* Stats */}
       <View style={styles.statsRow}>
@@ -398,6 +427,13 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     fontSize: 16,
     color: "#333",
+  },
+  syncText: {
+    textAlign: "center",
+    color: "#7C4DFF",
+    fontWeight: "600",
+    fontSize: 12,
+    marginTop: 8,
   },
   statsRow: {
     flexDirection: "row",
