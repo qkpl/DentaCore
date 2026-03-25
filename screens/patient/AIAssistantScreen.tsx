@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import { useState } from "react";
 import {
-    Alert,
     KeyboardAvoidingView,
     Platform,
     ScrollView,
@@ -119,13 +118,14 @@ export default function AIAssistantScreen({
 
       <KeyboardAvoidingView
         style={styles.keyboardAvoid}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
         {/* Messages */}
         <ScrollView
           style={styles.messagesContainer}
           contentContainerStyle={styles.messagesContent}
+          keyboardShouldPersistTaps="handled"
         >
           {messages.map((message) => (
             <View
@@ -202,13 +202,6 @@ export default function AIAssistantScreen({
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-
-      <TouchableOpacity
-        style={styles.floatingCircle}
-        onPress={() => Alert.alert("Welcome", "Hi! How can I help you today?")}
-      >
-        <Ionicons name="chatbubble-ellipses" size={24} color="#FFF" />
-      </TouchableOpacity>
     </View>
   );
 }
@@ -370,21 +363,5 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: "#E0E0E0",
-  },
-  floatingCircle: {
-    position: "absolute",
-    bottom: 22,
-    right: 22,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#00BFA6",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 8,
   },
 });

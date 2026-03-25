@@ -3,6 +3,9 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
+    Linking,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -125,6 +128,30 @@ export default function ClinicDetailsScreen({
     navigation.navigate("BookAppointment", { clinic });
   };
 
+  const handleOpenMap = useCallback(async () => {
+    if (!clinic || !hasCoords) {
+      return;
+    }
+
+    const { lat, lng } = clinic.location!;
+    const encodedLabel = encodeURIComponent(clinic.address || clinic.name);
+    const appleUrl = `http://maps.apple.com/?ll=${lat},${lng}&q=${encodedLabel}`;
+    const androidUrl = `geo:${lat},${lng}?q=${lat},${lng}(${encodedLabel})`;
+    const fallbackUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+    const targetUrl =
+      Platform.select({ ios: appleUrl, android: androidUrl }) || fallbackUrl;
+
+    try {
+      const canOpen = await Linking.canOpenURL(targetUrl);
+      await Linking.openURL(canOpen ? targetUrl : fallbackUrl);
+    } catch (error) {
+      Alert.alert(
+        "Map unavailable",
+        "We couldn't open your maps app. Please try again or check your internet connection.",
+      );
+    }
+  }, [clinic, hasCoords]);
+
   if (!clinic) {
     return (
       <View style={[styles.container, styles.centeredState]}>
@@ -183,6 +210,29 @@ export default function ClinicDetailsScreen({
               <Text style={styles.mapSyncText}>Syncing latest pin…</Text>
             </View>
           )}
+          <TouchableOpacity
+            style={[
+              styles.mapActionButton,
+              !hasCoords && styles.mapActionButtonDisabled,
+            ]}
+            onPress={handleOpenMap}
+            activeOpacity={0.85}
+            disabled={!hasCoords}
+          >
+            <Ionicons
+              name="navigate"
+              size={16}
+              color={hasCoords ? "#0F172A" : "#9CA3AF"}
+            />
+            <Text
+              style={[
+                styles.mapActionText,
+                !hasCoords && styles.mapActionTextDisabled,
+              ]}
+            >
+              Open in Maps
+            </Text>
+          </TouchableOpacity>
           <MapView
             style={StyleSheet.absoluteFill}
             provider={PROVIDER_GOOGLE}
@@ -223,7 +273,9 @@ export default function ClinicDetailsScreen({
           </View>
         </View>
         <Text style={styles.mapHint}>
-          Pinned by clinic team · Used for patient map search
+          {hasCoords
+            ? "Tap Open in Maps to launch turn-by-turn directions."
+            : "This clinic hasn’t pinned their map location yet."}
         </Text>
       </View>
 
@@ -467,6 +519,35 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#036666",
     fontWeight: "600",
+  },
+  mapActionButton: {
+    position: "absolute",
+    bottom: 12,
+    right: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.96)",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+    zIndex: 2,
+  },
+  mapActionButtonDisabled: {
+    backgroundColor: "rgba(243,244,246,0.92)",
+  },
+  mapActionText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  mapActionTextDisabled: {
+    color: "#9CA3AF",
   },
   mapBadge: {
     position: "absolute",

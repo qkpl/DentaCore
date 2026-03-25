@@ -1,21 +1,88 @@
 import { Ionicons } from "@expo/vector-icons";
-import React from "react";
+import * as ImagePicker from "expo-image-picker";
+import { useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
+import {
+  getPatientAvatarUri,
+  savePatientAvatarUri,
+  subscribeToPatientAvatar,
+} from "../../services/avatarService";
 
 interface ProfileScreenProps {
   navigation: any;
 }
 
 export default function ProfileScreen({ navigation }: ProfileScreenProps) {
-  const { user, logout } = useAuth();
+  const { user, logout, updateProfile, changePassword } = useAuth();
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [isPasswordModalVisible, setIsPasswordModalVisible] = useState(false);
+  const [profileName, setProfileName] = useState(user?.name ?? "");
+  const [profilePhone, setProfilePhone] = useState(user?.phone ?? "");
+  const [profileAddress, setProfileAddress] = useState(user?.address ?? "");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [isAvatarActionPending, setIsAvatarActionPending] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadAvatar = async () => {
+      const uri = await getPatientAvatarUri(user?.id ?? null);
+      if (isMounted) {
+        setAvatarUri(uri);
+      }
+    };
+
+    void loadAvatar();
+
+    if (!user?.id) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const unsubscribe = subscribeToPatientAvatar(({ userId, uri }) => {
+      if (isMounted && userId === user.id) {
+        setAvatarUri(uri);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [user?.id]);
+
+  const userInitials = useMemo(() => {
+    if (!user?.name) {
+      return "PT";
+    }
+    const initials = user.name
+      .split(" ")
+      .filter(Boolean)
+      .map((segment) => segment[0]?.toUpperCase() || "")
+      .join("");
+    return initials || "PT";
+  }, [user?.name]);
 
   const handleLogout = () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -32,11 +99,153 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   };
 
   const handleEditProfile = () => {
-    Alert.alert("Edit Profile", "Profile editing coming soon");
+    if (user) {
+      setProfileName(user.name ?? "");
+      setProfilePhone(user.phone ?? "");
+      setProfileAddress(user.address ?? "");
+    }
+    setIsEditModalVisible(true);
   };
 
   const handleChangePassword = () => {
-    Alert.alert("Change Password", "Password change feature coming soon");
+    setCurrentPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+    setShowCurrentPassword(false);
+    setShowNewPassword(false);
+    setShowConfirmPassword(false);
+    setIsPasswordModalVisible(true);
+  };
+
+  const pickAvatar = async (mode: "camera" | "library") => {
+    if (!user?.id) {
+      Alert.alert(
+        "Unable to update",
+        "Please sign in again to update your photo.",
+      );
+      return;
+    }
+
+    try {
+      setIsAvatarActionPending(true);
+      const permission =
+        mode === "camera"
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert(
+          "Permission needed",
+          mode === "camera"
+            ? "Camera access is required to take a profile photo."
+            : "Photo library access is required to choose a profile photo.",
+        );
+        return;
+      }
+
+      const pickerResult =
+        mode === "camera"
+          ? await ImagePicker.launchCameraAsync({
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.8,
+            })
+          : await ImagePicker.launchImageLibraryAsync({
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.8,
+            });
+
+      if (pickerResult.canceled) {
+        return;
+      }
+
+      const selectedUri = pickerResult.assets?.[0]?.uri;
+      if (selectedUri) {
+        await savePatientAvatarUri(user.id, selectedUri);
+        setAvatarUri(selectedUri);
+      }
+    } catch (error) {
+      Alert.alert(
+        "Photo error",
+        "We couldn't update your photo. Please try again.",
+      );
+    } finally {
+      setIsAvatarActionPending(false);
+    }
+  };
+
+  const handleAvatarUpdate = () => {
+    if (!user) {
+      Alert.alert("Not available", "Please log in to update your photo.");
+      return;
+    }
+
+    Alert.alert("Update photo", "Choose how to update your profile picture", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Take Photo",
+        onPress: () => {
+          void pickAvatar("camera");
+        },
+      },
+      {
+        text: "Choose Photo",
+        onPress: () => {
+          void pickAvatar("library");
+        },
+      },
+    ]);
+  };
+
+  const handleSaveProfile = async () => {
+    if (isSavingProfile) {
+      return;
+    }
+
+    const trimmedName = profileName.trim();
+    if (!trimmedName) {
+      Alert.alert("Missing info", "Name is required.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    const response = await updateProfile({
+      name: trimmedName,
+      phone: profilePhone,
+      address: profileAddress,
+    });
+    setIsSavingProfile(false);
+
+    if (response.success) {
+      Alert.alert("Profile updated", response.message);
+      setIsEditModalVisible(false);
+    } else {
+      Alert.alert("Update failed", response.message);
+    }
+  };
+
+  const handleSubmitPasswordChange = async () => {
+    if (isUpdatingPassword) {
+      return;
+    }
+
+    const trimmedNewPassword = newPassword.trim();
+    if (trimmedNewPassword !== confirmPassword.trim()) {
+      Alert.alert("Password mismatch", "New passwords do not match.");
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    const response = await changePassword(currentPassword, trimmedNewPassword);
+    setIsUpdatingPassword(false);
+
+    if (response.success) {
+      Alert.alert("Password updated", response.message);
+      setIsPasswordModalVisible(false);
+    } else {
+      Alert.alert("Update failed", response.message);
+    }
   };
 
   return (
@@ -57,19 +266,29 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       <View style={styles.header}>
         <View style={styles.avatarContainer}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {user?.name
-                .split(" ")
-                .map((n) => n[0])
-                .join("")
-                .toUpperCase()}
-            </Text>
+            {avatarUri ? (
+              <Image
+                source={{ uri: avatarUri }}
+                style={styles.avatarImage}
+                onError={() => setAvatarUri(null)}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{userInitials}</Text>
+            )}
           </View>
-          <TouchableOpacity style={styles.editAvatarButton}>
-            <Ionicons name="camera" size={16} color="#FFF" />
+          <TouchableOpacity
+            style={styles.editAvatarButton}
+            onPress={handleAvatarUpdate}
+            disabled={isAvatarActionPending}
+          >
+            {isAvatarActionPending ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Ionicons name="camera" size={16} color="#FFF" />
+            )}
           </TouchableOpacity>
         </View>
-        <Text style={styles.userName}>{user?.name}</Text>
+        <Text style={styles.userName}>{user?.name || "Patient"}</Text>
         <Text style={styles.userRole}>Patient</Text>
       </View>
 
@@ -84,7 +303,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             </View>
             <View style={styles.infoContent}>
               <Text style={styles.infoLabel}>Email</Text>
-              <Text style={styles.infoValue}>{user?.email}</Text>
+              <Text style={styles.infoValue}>{user?.email || "Not set"}</Text>
             </View>
           </View>
 
@@ -94,7 +313,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             </View>
             <View style={styles.infoContent}>
               <Text style={styles.infoLabel}>Phone</Text>
-              <Text style={styles.infoValue}>{user?.phone}</Text>
+              <Text style={styles.infoValue}>{user?.phone || "Not set"}</Text>
             </View>
           </View>
 
@@ -217,6 +436,200 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       </TouchableOpacity>
 
       <Text style={styles.version}>DentaCore v1.0.0</Text>
+
+      <Modal
+        visible={isEditModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsEditModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Edit Profile</Text>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Full Name</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Enter your full name"
+                value={profileName}
+                onChangeText={setProfileName}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Phone Number</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Enter your phone number"
+                keyboardType="phone-pad"
+                value={profilePhone}
+                onChangeText={setProfilePhone}
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Address</Text>
+              <TextInput
+                style={[styles.modalInput, styles.modalTextArea]}
+                placeholder="Street, city, ZIP"
+                value={profileAddress}
+                onChangeText={setProfileAddress}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={() => setIsEditModalVisible(false)}
+                disabled={isSavingProfile}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalPrimaryButton]}
+                onPress={handleSaveProfile}
+                disabled={isSavingProfile}
+              >
+                {isSavingProfile ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isPasswordModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsPasswordModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Change Password</Text>
+            <Text style={styles.modalDescription}>
+              Enter your current password, then choose a new one at least 6
+              characters long.
+            </Text>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Current Password</Text>
+              <View style={styles.passwordInputWrapper}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="••••••••"
+                  secureTextEntry={!showCurrentPassword}
+                  value={currentPassword}
+                  onChangeText={setCurrentPassword}
+                />
+                <TouchableOpacity
+                  style={styles.passwordToggle}
+                  onPress={() => setShowCurrentPassword((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showCurrentPassword
+                      ? "Hide current password"
+                      : "Show current password"
+                  }
+                >
+                  <Ionicons
+                    name={
+                      showCurrentPassword ? "eye-off-outline" : "eye-outline"
+                    }
+                    size={20}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>New Password</Text>
+              <View style={styles.passwordInputWrapper}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="••••••••"
+                  secureTextEntry={!showNewPassword}
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                />
+                <TouchableOpacity
+                  style={styles.passwordToggle}
+                  onPress={() => setShowNewPassword((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showNewPassword ? "Hide new password" : "Show new password"
+                  }
+                >
+                  <Ionicons
+                    name={showNewPassword ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Confirm New Password</Text>
+              <View style={styles.passwordInputWrapper}>
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="••••••••"
+                  secureTextEntry={!showConfirmPassword}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                />
+                <TouchableOpacity
+                  style={styles.passwordToggle}
+                  onPress={() => setShowConfirmPassword((prev) => !prev)}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    showConfirmPassword
+                      ? "Hide confirmation password"
+                      : "Show confirmation password"
+                  }
+                >
+                  <Ionicons
+                    name={
+                      showConfirmPassword ? "eye-off-outline" : "eye-outline"
+                    }
+                    size={20}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={() => setIsPasswordModalVisible(false)}
+                disabled={isUpdatingPassword}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalPrimaryButton]}
+                onPress={handleSubmitPasswordChange}
+                disabled={isUpdatingPassword}
+              >
+                {isUpdatingPassword ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Update</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -267,6 +680,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 4,
     borderColor: "#FFF",
+  },
+  avatarImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 50,
   },
   avatarText: {
     fontSize: 36,
@@ -391,5 +809,99 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#999",
     marginVertical: 30,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
+  modalCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#111",
+    marginBottom: 4,
+  },
+  modalDescription: {
+    fontSize: 13,
+    color: "#555",
+    marginBottom: 16,
+  },
+  modalField: {
+    marginBottom: 14,
+  },
+  modalLabel: {
+    fontSize: 13,
+    color: "#666",
+    marginBottom: 6,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
+    color: "#111",
+    backgroundColor: "#FAFAFA",
+  },
+  modalTextArea: {
+    height: 80,
+    textAlignVertical: "top",
+  },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 10,
+  },
+  modalButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: "#ECEFF1",
+    marginLeft: 10,
+  },
+  modalButtonText: {
+    fontSize: 15,
+    color: "#546E7A",
+    fontWeight: "600",
+  },
+  modalPrimaryButton: {
+    backgroundColor: "#00BFA6",
+  },
+  modalPrimaryButtonText: {
+    fontSize: 15,
+    color: "#FFF",
+    fontWeight: "600",
+  },
+  passwordInputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    backgroundColor: "#FAFAFA",
+    paddingHorizontal: 8,
+    height: 52,
+  },
+  passwordInput: {
+    flex: 1,
+    borderWidth: 0,
+    paddingHorizontal: 8,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#111",
+    backgroundColor: "transparent",
+  },
+  passwordToggle: {
+    paddingHorizontal: 8,
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
   },
 });

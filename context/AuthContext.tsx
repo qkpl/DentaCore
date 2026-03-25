@@ -1,31 +1,35 @@
 import { Clinic, mockClinics, mockUsers, User } from "@/data/mockData";
 import {
-    activateClinic,
-    getClinicById,
-    syncAdminRelationships,
-    syncAppointmentsFromFirestore,
+  activateClinic,
+  getClinicById,
+  syncAdminRelationships,
+  syncAppointmentsFromFirestore,
+  updateUser as updateUserCache,
 } from "@/services/dataService";
 import { auth, db } from "@/services/firebase";
 import {
-    createUserWithEmailAndPassword,
-    onAuthStateChanged,
-    signInWithEmailAndPassword,
-    signOut,
+  createUserWithEmailAndPassword,
+  EmailAuthProvider,
+  onAuthStateChanged,
+  reauthenticateWithCredential,
+  signInWithEmailAndPassword,
+  signOut,
+  updatePassword,
 } from "firebase/auth";
 import {
-    collection,
-    doc,
-    getDoc,
-    getDocs,
-    setDoc,
-    updateDoc,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
 } from "firebase/firestore";
 import React, {
-    createContext,
-    ReactNode,
-    useContext,
-    useEffect,
-    useState,
+  createContext,
+  ReactNode,
+  useContext,
+  useEffect,
+  useState,
 } from "react";
 
 interface AuthResponse {
@@ -51,6 +55,13 @@ interface AuthContextType {
   logout: () => Promise<void>;
   refreshClinics: () => Promise<void>;
   isAuthenticated: boolean;
+  updateProfile: (
+    updates: Partial<Pick<User, "name" | "phone" | "address">>,
+  ) => Promise<AuthResponse>;
+  changePassword: (
+    currentPassword: string,
+    newPassword: string,
+  ) => Promise<AuthResponse>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -233,6 +244,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
 }) => {
   const [user, setUser] = useState<User | null>(null);
   const [clinic, setClinic] = useState<Clinic | null>(null);
+
+  const applyUserUpdates = (
+    updates: Partial<User>,
+    baseUser?: User | null,
+  ): User | null => {
+    const source = baseUser ?? user;
+    if (!source) {
+      return null;
+    }
+
+    const mergedUser = { ...source, ...updates } as User;
+    setUser(mergedUser);
+    updateUserCache(source.id, updates);
+    return mergedUser;
+  };
 
   const upsertMockClinic = (clinicData: Clinic): void => {
     const index = mockClinics.findIndex((item) => item.id === clinicData.id);
@@ -552,6 +578,135 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
     setClinic(null);
   };
 
+  const updateProfile = async (
+    updates: Partial<Pick<User, "name" | "phone" | "address">>,
+  ): Promise<AuthResponse> => {
+    if (!user) {
+      return { success: false, message: "You need to be logged in." };
+    }
+
+    const sanitized: Partial<User> = {};
+
+    if (updates.name !== undefined) {
+      sanitized.name = updates.name.trim();
+    }
+
+    if (updates.phone !== undefined) {
+      sanitized.phone = updates.phone.trim();
+    }
+
+    if (updates.address !== undefined) {
+      sanitized.address = updates.address.trim();
+    }
+
+    const hasChanges = Object.keys(sanitized).length > 0;
+    if (!hasChanges) {
+      return { success: false, message: "No profile changes detected." };
+    }
+
+    let syncedWithCloud = true;
+    try {
+      await updateDoc(doc(db, "users", user.id), sanitized);
+    } catch (error) {
+      syncedWithCloud = false;
+      console.warn("Failed to update profile in Firestore", error);
+    }
+
+    applyUserUpdates(sanitized);
+
+    return {
+      success: true,
+      message: syncedWithCloud
+        ? "Profile updated successfully."
+        : "Profile updated locally. Changes will sync when you're back online.",
+    };
+  };
+
+  const changePassword = async (
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<AuthResponse> => {
+    if (!user) {
+      return { success: false, message: "You need to be logged in." };
+    }
+
+    const trimmedCurrent = currentPassword.trim();
+    const trimmedNew = newPassword.trim();
+
+    if (!trimmedCurrent || !trimmedNew) {
+      return {
+        success: false,
+        message: "Please provide both the current and new password.",
+      };
+    }
+
+    if (trimmedNew.length < 6) {
+      return {
+        success: false,
+        message: "Password should be at least 6 characters long.",
+      };
+    }
+
+    if (trimmedCurrent === trimmedNew) {
+      return {
+        success: false,
+        message: "New password cannot match the current password.",
+      };
+    }
+
+    const firebaseUser = auth.currentUser;
+
+    if (firebaseUser?.email) {
+      try {
+        const credential = EmailAuthProvider.credential(
+          firebaseUser.email,
+          trimmedCurrent,
+        );
+        await reauthenticateWithCredential(firebaseUser, credential);
+        await updatePassword(firebaseUser, trimmedNew);
+      } catch (error: any) {
+        const code = error?.code ?? "";
+        if (
+          code === "auth/invalid-credential" ||
+          code === "auth/wrong-password"
+        ) {
+          return { success: false, message: "Current password is incorrect." };
+        }
+        if (code === "auth/weak-password") {
+          return {
+            success: false,
+            message: "Password should be at least 6 characters long.",
+          };
+        }
+        return {
+          success: false,
+          message:
+            "Unable to update password right now. Please try again later.",
+        };
+      }
+    } else {
+      if (!user.password || user.password !== trimmedCurrent) {
+        return {
+          success: false,
+          message: "Current password is incorrect.",
+        };
+      }
+    }
+
+    try {
+      await updateDoc(doc(db, "users", user.id), { password: trimmedNew });
+    } catch (error) {
+      console.warn("Failed to sync password change to Firestore", error);
+    }
+
+    applyUserUpdates({ password: trimmedNew });
+
+    return {
+      success: true,
+      message: "Password updated successfully.",
+    };
+  };
+
   const refreshClinics = async (): Promise<void> => {
     await syncClinicsFromFirestore();
     await syncAppointmentsFromFirestore();
@@ -569,6 +724,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
         logout,
         refreshClinics,
         isAuthenticated,
+        updateProfile,
+        changePassword,
       }}
     >
       {children}

@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { createStackNavigator } from "@react-navigation/stack";
-import React from "react";
+import { StyleSheet, Text, View } from "react-native";
 
 // Patient Screens
 import AIAssistantScreen from "../screens/patient/AIAssistantScreen";
@@ -14,6 +14,40 @@ import RecordsScreen from "../screens/patient/RecordsScreen";
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
+
+const TAB_CONFIG: Record<
+  string,
+  {
+    label: string;
+    activeIcon: keyof typeof Ionicons.glyphMap;
+    inactiveIcon: keyof typeof Ionicons.glyphMap;
+  }
+> = {
+  Home: { label: "Home", activeIcon: "home", inactiveIcon: "home-outline" },
+  Appointments: {
+    label: "Appointments",
+    activeIcon: "calendar",
+    inactiveIcon: "calendar-outline",
+  },
+  Records: {
+    label: "Records",
+    activeIcon: "document-text",
+    inactiveIcon: "document-text-outline",
+  },
+  AIAssistant: {
+    label: "Ask AI",
+    activeIcon: "chatbubbles",
+    inactiveIcon: "chatbubbles-outline",
+  },
+  Profile: {
+    label: "Profile",
+    activeIcon: "person",
+    inactiveIcon: "person-outline",
+  },
+};
+
+const ACTIVE_COLOR = "#00BFA6";
+const INACTIVE_COLOR = "#6B7280";
 
 function PatientHomeStack() {
   return (
@@ -29,67 +63,100 @@ export default function PatientNavigator() {
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ focused, color, size }) => {
-          let iconName: keyof typeof Ionicons.glyphMap;
-
-          if (route.name === "Home") {
-            iconName = focused ? "home" : "home-outline";
-          } else if (route.name === "Appointments") {
-            iconName = focused ? "calendar" : "calendar-outline";
-          } else if (route.name === "Records") {
-            iconName = focused ? "document-text" : "document-text-outline";
-          } else if (route.name === "AIAssistant") {
-            iconName = focused ? "chatbubbles" : "chatbubbles-outline";
-          } else if (route.name === "Profile") {
-            iconName = focused ? "person" : "person-outline";
-          } else {
-            iconName = "help-outline";
-          }
-
-          return <Ionicons name={iconName} size={size} color={color} />;
-        },
-        tabBarActiveTintColor: "#00BFA6",
-        tabBarInactiveTintColor: "#999",
+        tabBarShowLabel: false,
+        tabBarActiveTintColor: ACTIVE_COLOR,
+        tabBarInactiveTintColor: INACTIVE_COLOR,
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: "#FFF",
-          borderTopWidth: 1,
-          borderTopColor: "#F0F0F0",
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: "600",
-        },
+        tabBarStyle: styles.tabBar,
+        tabBarItemStyle: styles.tabBarItem,
+        tabBarHideOnKeyboard: true,
+        tabBarIcon: ({ focused, color }) => (
+          <TabBarIcon routeName={route.name} focused={focused} color={color} />
+        ),
       })}
     >
-      <Tab.Screen
-        name="Home"
-        component={PatientHomeStack}
-        options={{ tabBarLabel: "Home" }}
-      />
-      <Tab.Screen
-        name="Appointments"
-        component={AppointmentsScreen}
-        options={{ tabBarLabel: "Appointments" }}
-      />
-      <Tab.Screen
-        name="Records"
-        component={RecordsScreen}
-        options={{ tabBarLabel: "Records" }}
-      />
-      <Tab.Screen
-        name="AIAssistant"
-        component={AIAssistantScreen}
-        options={{ tabBarLabel: "Ask AI" }}
-      />
-      <Tab.Screen
-        name="Profile"
-        component={ProfileScreen}
-        options={{ tabBarLabel: "Profile" }}
-      />
+      <Tab.Screen name="Home" component={PatientHomeStack} />
+      <Tab.Screen name="Appointments" component={AppointmentsScreen} />
+      <Tab.Screen name="Records" component={RecordsScreen} />
+      <Tab.Screen name="AIAssistant" component={AIAssistantScreen} />
+      <Tab.Screen name="Profile" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
+
+type TabBarIconProps = {
+  routeName: string;
+  focused: boolean;
+  color: string;
+};
+
+function TabBarIcon({ routeName, focused, color }: TabBarIconProps) {
+  const config = TAB_CONFIG[routeName] ?? TAB_CONFIG.Home;
+  const iconName = focused ? config.activeIcon : config.inactiveIcon;
+  const displayColor = focused ? ACTIVE_COLOR : color || INACTIVE_COLOR;
+
+  return (
+    <View style={styles.tabItemContent}>
+      <View style={[styles.iconBadge, focused && styles.iconBadgeActive]}>
+        <Ionicons name={iconName} size={22} color={displayColor} />
+      </View>
+      <Text
+        style={[styles.tabLabel, focused && styles.tabLabelActive]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
+        ellipsizeMode="tail"
+      >
+        {config.label}
+      </Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  tabBar: {
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 0,
+    height: 74,
+    paddingBottom: 12,
+    paddingTop: 10,
+    paddingHorizontal: 18,
+    shadowColor: "#000000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 10,
+  },
+  tabBarItem: {
+    paddingVertical: 4,
+    flex: 1,
+    minWidth: 70,
+  },
+  tabItemContent: {
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  iconBadge: {
+    width: 48,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconBadgeActive: {
+    backgroundColor: "rgba(0, 191, 166, 0.15)",
+  },
+  tabLabel: {
+    fontSize: 12.5,
+    lineHeight: 15,
+    fontWeight: "600",
+    color: INACTIVE_COLOR,
+    letterSpacing: 0,
+    textAlign: "center",
+    minWidth: 70,
+  },
+  tabLabelActive: {
+    color: ACTIVE_COLOR,
+  },
+});

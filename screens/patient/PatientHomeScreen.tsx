@@ -1,8 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import React, { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    Image,
     Modal,
     ScrollView,
     StyleSheet,
@@ -13,6 +14,10 @@ import {
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Clinic } from "../../data/mockData";
+import {
+    getPatientAvatarUri,
+    subscribeToPatientAvatar,
+} from "../../services/avatarService";
 import { filterClinics, searchClinics } from "../../services/dataService";
 
 interface PatientHomeScreenProps {
@@ -29,6 +34,7 @@ export default function PatientHomeScreen({
   const [allClinics, setAllClinics] = useState<Clinic[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [refreshingClinics, setRefreshingClinics] = useState(false);
+  const [avatarUri, setAvatarUri] = useState<string | null>(null);
 
   // Filter states
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -47,6 +53,48 @@ export default function PatientHomeScreen({
   useEffect(() => {
     applyFilters();
   }, [searchQuery, selectedServices, minRating, sortBy]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadAvatar = async () => {
+      const uri = await getPatientAvatarUri(user?.id ?? null);
+      if (isMounted) {
+        setAvatarUri(uri);
+      }
+    };
+
+    void loadAvatar();
+
+    if (!user?.id) {
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    const unsubscribe = subscribeToPatientAvatar(({ userId, uri }) => {
+      if (isMounted && userId === user.id) {
+        setAvatarUri(uri);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, [user?.id]);
+
+  const userInitials = useMemo(() => {
+    if (!user?.name) {
+      return "PT";
+    }
+    const initials = user.name
+      .split(" ")
+      .filter(Boolean)
+      .map((segment) => segment[0]?.toUpperCase() || "")
+      .join("");
+    return initials || "PT";
+  }, [user?.name]);
 
   const applyFilters = () => {
     let results = searchClinics(searchQuery);
@@ -131,7 +179,13 @@ export default function PatientHomeScreen({
             style={styles.profileButton}
             onPress={() => navigation.navigate("Profile")}
           >
-            <Ionicons name="person-circle" size={40} color="#00BFA6" />
+            {avatarUri ? (
+              <Image source={{ uri: avatarUri }} style={styles.profileAvatar} />
+            ) : (
+              <View style={styles.profileInitials}>
+                <Text style={styles.profileInitialsText}>{userInitials}</Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
 
@@ -513,7 +567,33 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   profileButton: {
-    padding: 5,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#FFF",
+    borderWidth: 2,
+    borderColor: "#00BFA6",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  profileAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+  },
+  profileInitials: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#E3F7F2",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  profileInitialsText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#00BFA6",
   },
   searchContainer: {
     flexDirection: "row",

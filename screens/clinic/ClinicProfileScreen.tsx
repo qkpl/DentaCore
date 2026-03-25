@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import Constants from "expo-constants";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import * as Location from "expo-location";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Modal,
@@ -64,6 +65,9 @@ export default function ClinicProfileScreen({
   const [geocodeStatus, setGeocodeStatus] = useState<GeocodeStatus>("idle");
   const [geocodeMessage, setGeocodeMessage] = useState("");
   const [lastPinnedAddress, setLastPinnedAddress] = useState("");
+  const deviceGeocodePermission = useRef<"unknown" | "granted" | "denied">(
+    "unknown",
+  );
 
   const googleMapsApiKey = useMemo(() => {
     const envKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -75,6 +79,32 @@ export default function ClinicProfileScreen({
   }, []);
 
   const supportsGooglePlaces = googleMapsApiKey.length > 0;
+
+  const ensureDeviceGeocodePermission = useCallback(async () => {
+    if (deviceGeocodePermission.current === "granted") {
+      return true;
+    }
+
+    try {
+      const current = await Location.getForegroundPermissionsAsync();
+      if (current.granted) {
+        deviceGeocodePermission.current = "granted";
+        return true;
+      }
+
+      const requested = await Location.requestForegroundPermissionsAsync();
+      if (requested.granted) {
+        deviceGeocodePermission.current = "granted";
+        return true;
+      }
+
+      deviceGeocodePermission.current = "denied";
+      return false;
+    } catch (error) {
+      console.warn("Unable to query location permission", error);
+      return false;
+    }
+  }, []);
 
   const geocodeAddressWithGoogle = useCallback(
     async (targetAddress: string) => {
@@ -104,6 +134,41 @@ export default function ClinicProfileScreen({
     [googleMapsApiKey, supportsGooglePlaces],
   );
 
+  const geocodeAddressWithDevice = useCallback(
+    async (targetAddress: string) => {
+      if (!targetAddress) {
+        return null;
+      }
+
+      const hasPermission = await ensureDeviceGeocodePermission();
+      if (!hasPermission) {
+        const error = new Error("permission-denied");
+        (error as { code?: string }).code = "permission-denied";
+        throw error;
+      }
+
+      try {
+        const results = await Location.geocodeAsync(targetAddress);
+        const first = results?.[0];
+        if (
+          first &&
+          typeof first.latitude === "number" &&
+          Number.isFinite(first.latitude) &&
+          typeof first.longitude === "number" &&
+          Number.isFinite(first.longitude)
+        ) {
+          return { lat: first.latitude, lng: first.longitude };
+        }
+      } catch (error) {
+        console.warn("Failed to geocode with device services", error);
+        throw error;
+      }
+
+      return null;
+    },
+    [ensureDeviceGeocodePermission],
+  );
+
   const syncCoordsForAddress = useCallback(
     async (targetAddress: string) => {
       if (!targetAddress) {
@@ -120,18 +185,59 @@ export default function ClinicProfileScreen({
         return true;
       }
 
-      const coords = await geocodeAddressWithGoogle(targetAddress);
+      let coords: { lat: number; lng: number } | null = null;
+      let method: "google" | "device" | null = null;
+
+      if (supportsGooglePlaces) {
+        const googleCoords = await geocodeAddressWithGoogle(targetAddress);
+        if (googleCoords) {
+          coords = googleCoords;
+          method = "google";
+        }
+      }
+
+      let devicePermissionDenied = false;
+
       if (!coords) {
+        try {
+          const deviceCoords = await geocodeAddressWithDevice(targetAddress);
+          if (deviceCoords) {
+            coords = deviceCoords;
+            method = "device";
+          }
+        } catch (error) {
+          if ((error as { code?: string }).code === "permission-denied") {
+            devicePermissionDenied = true;
+          }
+        }
+      }
+
+      if (!coords) {
+        if (devicePermissionDenied) {
+          setGeocodeStatus("error");
+          setGeocodeMessage(
+            "Enable location permissions to auto-pin using built-in lookup, or drop a pin manually.",
+          );
+        }
         return false;
       }
 
       setLocationCoords(coords);
       setLastPinnedAddress(targetAddress);
       setGeocodeStatus("success");
-      setGeocodeMessage("Address pinned using Google Maps.");
+      setGeocodeMessage(
+        method === "google"
+          ? "Address pinned using Google Maps."
+          : "Address pinned using built-in location lookup.",
+      );
       return true;
     },
-    [geocodeAddressWithGoogle, lastPinnedAddress],
+    [
+      geocodeAddressWithDevice,
+      geocodeAddressWithGoogle,
+      lastPinnedAddress,
+      supportsGooglePlaces,
+    ],
   );
 
   useEffect(() => {
@@ -182,18 +288,21 @@ export default function ClinicProfileScreen({
 
     setIsSaving(true);
     try {
-      if (supportsGooglePlaces) {
+      const shouldAutoPinBeforeSave =
+        trimmedAddress.length > 0 && lastPinnedAddress !== "__manual__";
+
+      if (shouldAutoPinBeforeSave) {
         setGeocodeStatus("loading");
-        setGeocodeMessage("Verifying address with Google Maps…");
+        setGeocodeMessage("Verifying address with auto-pin service…");
         const couldSync = await syncCoordsForAddress(trimmedAddress);
         if (!couldSync) {
           setGeocodeStatus("error");
           setGeocodeMessage(
-            "Google Maps couldn't find this address. Use search suggestions or pin the map manually.",
+            "We couldn't auto-pin this address. Drop a pin manually before saving.",
           );
           Alert.alert(
             "Pin required",
-            "Google Maps couldn't find this address. Please pick an address from the suggestions or drop a pin on the map before saving.",
+            "We couldn't auto-pin this address. Please refine it or drop a pin on the map before saving.",
           );
           return;
         }
@@ -332,7 +441,7 @@ export default function ClinicProfileScreen({
     setGeocodeMessage("Coordinates updated manually.");
   };
 
-  const handleSyncCoordsFromAddress = async () => {
+  const handleAutoPinFromAddress = async () => {
     const trimmedAddress = address.trim();
 
     if (!trimmedAddress) {
@@ -340,32 +449,21 @@ export default function ClinicProfileScreen({
       return;
     }
 
-    if (!supportsGooglePlaces) {
-      Alert.alert(
-        "Google Maps key needed",
-        "Coordinate sync requires a Google Maps API key. Add EXPO_PUBLIC_GOOGLE_MAPS_API_KEY to enable this feature.",
-      );
-      return;
-    }
-
     setGeocodeStatus("loading");
-    setGeocodeMessage("Fetching coordinates from Google Maps…");
+    setGeocodeMessage("Locating address…");
 
     const synced = await syncCoordsForAddress(trimmedAddress);
     if (!synced) {
       setGeocodeStatus("error");
       setGeocodeMessage(
-        "Google Maps couldn't find this address. Try refining it or drop a pin manually.",
+        "We couldn't find this address. Try refining it or drop a pin manually.",
       );
       Alert.alert(
         "Location not found",
-        "Google Maps couldn't locate this address. Please adjust the map pin manually.",
+        "We couldn't locate this address automatically. Please adjust the map pin manually.",
       );
       return;
     }
-
-    setGeocodeStatus("success");
-    setGeocodeMessage("Coordinates refreshed from address via Google Maps.");
   };
 
   const handleLogout = () => {
@@ -574,17 +672,15 @@ export default function ClinicProfileScreen({
                 Tap on the map to pin your exact clinic location or adjust the
                 coordinates below.
               </Text>
-              {supportsGooglePlaces && (
-                <TouchableOpacity
-                  style={styles.mapHintButton}
-                  onPress={handleSyncCoordsFromAddress}
-                >
-                  <Ionicons name="refresh" size={16} color="#059669" />
-                  <Text style={styles.mapHintButtonText}>
-                    Use address coordinates
-                  </Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                style={styles.mapHintButton}
+                onPress={handleAutoPinFromAddress}
+              >
+                <Ionicons name="navigate" size={16} color="#059669" />
+                <Text style={styles.mapHintButtonText}>
+                  Auto-pin from address
+                </Text>
+              </TouchableOpacity>
               {geocodeMessage.length > 0 && (
                 <Text
                   style={[

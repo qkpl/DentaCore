@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import * as Location from "expo-location";
+import { useEffect, useMemo, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     Modal,
     ScrollView,
@@ -10,6 +12,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Clinic } from "../../data/mockData";
 import {
     deleteClinic,
@@ -37,6 +40,12 @@ export default function AdminClinicsScreen({
   const [clinicAddress, setClinicAddress] = useState("");
   const [clinicPhone, setClinicPhone] = useState("");
   const [clinicEmail, setClinicEmail] = useState("");
+  const [clinicLatitude, setClinicLatitude] = useState("");
+  const [clinicLongitude, setClinicLongitude] = useState("");
+  const [pinStatus, setPinStatus] = useState<
+    "idle" | "loading" | "success" | "error"
+  >("idle");
+  const [pinError, setPinError] = useState<string | null>(null);
 
   useEffect(() => {
     let isActive = true;
@@ -68,6 +77,18 @@ export default function AdminClinicsScreen({
       setClinicAddress(selectedClinic.address);
       setClinicPhone(selectedClinic.phone);
       setClinicEmail(selectedClinic.email);
+      setClinicLatitude(
+        Number.isFinite(selectedClinic.location?.lat)
+          ? String(selectedClinic.location!.lat)
+          : "",
+      );
+      setClinicLongitude(
+        Number.isFinite(selectedClinic.location?.lng)
+          ? String(selectedClinic.location!.lng)
+          : "",
+      );
+      setPinStatus("idle");
+      setPinError(null);
     }
   }, [selectedClinic]);
 
@@ -76,6 +97,67 @@ export default function AdminClinicsScreen({
       clinic.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       clinic.address.toLowerCase().includes(searchQuery.toLowerCase()),
   );
+
+  const parsedLatitude = useMemo(() => {
+    const value = Number(clinicLatitude);
+    return Number.isFinite(value) ? value : null;
+  }, [clinicLatitude]);
+
+  const parsedLongitude = useMemo(() => {
+    const value = Number(clinicLongitude);
+    return Number.isFinite(value) ? value : null;
+  }, [clinicLongitude]);
+
+  const hasValidCoordinates =
+    parsedLatitude !== null && parsedLongitude !== null;
+
+  const mapPreviewRegion = useMemo(() => {
+    if (parsedLatitude !== null && parsedLongitude !== null) {
+      return {
+        latitude: parsedLatitude,
+        longitude: parsedLongitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      };
+    }
+
+    return {
+      latitude: 14.5995,
+      longitude: 120.9842,
+      latitudeDelta: 0.5,
+      longitudeDelta: 0.5,
+    };
+  }, [parsedLatitude, parsedLongitude]);
+
+  const handleGeneratePin = async () => {
+    if (!clinicAddress.trim()) {
+      Alert.alert("Address required", "Please enter the clinic address first.");
+      return;
+    }
+
+    setPinStatus("loading");
+    setPinError(null);
+
+    try {
+      const results = await Location.geocodeAsync(clinicAddress.trim());
+      const first = results[0];
+      if (first?.latitude && first?.longitude) {
+        setClinicLatitude(first.latitude.toFixed(6));
+        setClinicLongitude(first.longitude.toFixed(6));
+        setPinStatus("success");
+      } else {
+        setPinStatus("error");
+        setPinError(
+          "We couldn't find that address. Please refine it or pin manually.",
+        );
+      }
+    } catch (error) {
+      setPinStatus("error");
+      setPinError(
+        "Unable to contact the map service. Check your internet connection and try again.",
+      );
+    }
+  };
 
   const handleViewClinic = (clinic: Clinic) => {
     Alert.alert(
@@ -88,6 +170,11 @@ export default function AdminClinicsScreen({
   const handleEditClinic = (clinic: Clinic) => {
     setSelectedClinic(clinic);
     setEditModalVisible(true);
+  };
+
+  const closeEditModal = () => {
+    setEditModalVisible(false);
+    setSelectedClinic(null);
   };
 
   const handleSaveClinic = async () => {
@@ -103,17 +190,29 @@ export default function AdminClinicsScreen({
       return;
     }
 
-    const success = await updateClinic(selectedClinic.id, {
+    const updates: Partial<Omit<Clinic, "id">> = {
       name: clinicName,
       address: clinicAddress,
       phone: clinicPhone,
       email: clinicEmail,
-    });
+    };
+
+    if (
+      hasValidCoordinates &&
+      parsedLatitude !== null &&
+      parsedLongitude !== null
+    ) {
+      updates.location = {
+        lat: parsedLatitude,
+        lng: parsedLongitude,
+      };
+    }
+
+    const success = await updateClinic(selectedClinic.id, updates);
 
     if (success) {
       Alert.alert("Success", "Clinic updated successfully");
-      setEditModalVisible(false);
-      setSelectedClinic(null);
+      closeEditModal();
       setClinics([...getAllClinics()]);
       setRefreshTrigger((prev) => prev + 1);
     } else {
@@ -289,7 +388,7 @@ export default function AdminClinicsScreen({
           <View style={styles.modalHeader}>
             <TouchableOpacity
               style={styles.closeButton}
-              onPress={() => setEditModalVisible(false)}
+              onPress={closeEditModal}
             >
               <Ionicons name="close" size={28} color="#333" />
             </TouchableOpacity>
@@ -321,6 +420,108 @@ export default function AdminClinicsScreen({
             </View>
 
             <View style={styles.formSection}>
+              <View style={styles.formLabelRow}>
+                <Text style={styles.formLabel}>Map Location</Text>
+                <Text style={styles.formHelperText}>Visible to patients</Text>
+              </View>
+              <Text style={styles.formHint}>
+                Enter latitude & longitude or tap Auto-pin to convert the clinic
+                address into map coordinates.
+              </Text>
+              <View style={styles.coordinateRow}>
+                <View style={styles.coordinateGroup}>
+                  <Text style={styles.coordinateLabel}>Latitude</Text>
+                  <TextInput
+                    style={styles.coordinateInput}
+                    placeholder="14.5995"
+                    keyboardType="decimal-pad"
+                    value={clinicLatitude}
+                    onChangeText={(value) => {
+                      setClinicLatitude(value);
+                      setPinStatus("idle");
+                    }}
+                  />
+                </View>
+                <View style={styles.coordinateGroup}>
+                  <Text style={styles.coordinateLabel}>Longitude</Text>
+                  <TextInput
+                    style={styles.coordinateInput}
+                    placeholder="120.9842"
+                    keyboardType="decimal-pad"
+                    value={clinicLongitude}
+                    onChangeText={(value) => {
+                      setClinicLongitude(value);
+                      setPinStatus("idle");
+                    }}
+                  />
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[
+                  styles.pinButton,
+                  pinStatus === "loading" && styles.pinButtonDisabled,
+                ]}
+                onPress={handleGeneratePin}
+                disabled={pinStatus === "loading"}
+              >
+                {pinStatus === "loading" ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Ionicons
+                    name="navigate"
+                    size={18}
+                    color="#FFF"
+                    style={styles.pinButtonIcon}
+                  />
+                )}
+                <Text style={styles.pinButtonText}>Auto-pin from address</Text>
+              </TouchableOpacity>
+              {pinStatus === "success" && (
+                <Text style={[styles.pinStatusText, styles.pinStatusSuccess]}>
+                  Pin updated! Save the clinic to publish the new map location.
+                </Text>
+              )}
+              {pinStatus === "error" && pinError && (
+                <Text style={[styles.pinStatusText, styles.pinStatusError]}>
+                  {pinError}
+                </Text>
+              )}
+
+              <View style={styles.mapPreviewContainer}>
+                <MapView
+                  provider={PROVIDER_GOOGLE}
+                  style={styles.mapPreview}
+                  pointerEvents="none"
+                  region={mapPreviewRegion}
+                >
+                  {hasValidCoordinates &&
+                  parsedLatitude !== null &&
+                  parsedLongitude !== null ? (
+                    <Marker
+                      coordinate={{
+                        latitude: parsedLatitude,
+                        longitude: parsedLongitude,
+                      }}
+                    />
+                  ) : null}
+                </MapView>
+                <View style={styles.mapPreviewOverlay}>
+                  <Text style={styles.mapPreviewTitle}>
+                    {hasValidCoordinates ? "Pinned location" : "No pin yet"}
+                  </Text>
+                  <Text style={styles.mapPreviewSubtitle}>
+                    {hasValidCoordinates &&
+                    parsedLatitude !== null &&
+                    parsedLongitude !== null
+                      ? `${parsedLatitude.toFixed(5)}, ${parsedLongitude.toFixed(5)}`
+                      : "Use Auto-pin or fill in the coordinates manually"}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.formSection}>
               <Text style={styles.formLabel}>Phone Number *</Text>
               <TextInput
                 style={styles.formInput}
@@ -348,7 +549,7 @@ export default function AdminClinicsScreen({
           <View style={styles.modalFooter}>
             <TouchableOpacity
               style={styles.cancelButton}
-              onPress={() => setEditModalVisible(false)}
+              onPress={closeEditModal}
             >
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
@@ -607,6 +808,107 @@ const styles = StyleSheet.create({
     borderColor: "#E0E0E0",
     fontSize: 16,
     color: "#333",
+  },
+  formLabelRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  formHelperText: {
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  formHint: {
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  coordinateRow: {
+    flexDirection: "row",
+    columnGap: 12,
+    marginBottom: 12,
+  },
+  coordinateGroup: {
+    flex: 1,
+  },
+  coordinateLabel: {
+    fontSize: 12,
+    color: "#4B5563",
+    marginBottom: 6,
+    fontWeight: "600",
+  },
+  coordinateInput: {
+    backgroundColor: "#FFF",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    fontSize: 15,
+    color: "#111827",
+  },
+  pinButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#7C4DFF",
+    borderRadius: 12,
+    paddingVertical: 12,
+  },
+  pinButtonDisabled: {
+    opacity: 0.7,
+  },
+  pinButtonIcon: {
+    marginRight: 4,
+  },
+  pinButtonText: {
+    color: "#FFF",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  pinStatusText: {
+    marginTop: 8,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  pinStatusSuccess: {
+    color: "#148348",
+  },
+  pinStatusError: {
+    color: "#DC2626",
+  },
+  mapPreviewContainer: {
+    marginTop: 16,
+    borderRadius: 16,
+    overflow: "hidden",
+    height: 180,
+    backgroundColor: "#FFF",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  mapPreview: {
+    flex: 1,
+  },
+  mapPreviewOverlay: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    backgroundColor: "rgba(255,255,255,0.92)",
+    borderRadius: 12,
+    padding: 10,
+  },
+  mapPreviewTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 2,
+  },
+  mapPreviewSubtitle: {
+    fontSize: 12,
+    color: "#4B5563",
   },
   modalFooter: {
     flexDirection: "row",
