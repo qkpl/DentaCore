@@ -1,16 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Linking from "expo-linking";
+import * as WebBrowser from "expo-web-browser";
 import { useEffect, useMemo, useState } from "react";
 import {
-    Alert,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Clinic, PaymentMethod } from "../../data/mockData";
-import { createAppointment } from "../../services/dataService";
+import { createAppointment, getServicePrice } from "../../services/dataService";
+import { createPayPalOrder } from "../../services/paypalService";
+
+WebBrowser.maybeCompleteAuthSession();
 
 interface BookAppointmentScreenProps {
   route: any;
@@ -52,7 +57,7 @@ const parseTimeToHour = (timeLabel: string): number | null => {
   return rawHour === 12 ? 12 : rawHour + 12;
 };
 
-const buildTimeSlots = (operatingHours: string): string[] => {
+const buildTimeSlots = (operatingHours: string): TimeSlot[] => {
   const [startRaw, endRaw] = operatingHours
     .split("-")
     .map((value) => value.trim());
@@ -66,9 +71,12 @@ const buildTimeSlots = (operatingHours: string): string[] => {
     return [];
   }
 
-  const slots: string[] = [];
+  const slots: TimeSlot[] = [];
   for (let hour = startHour; hour < endHour; hour += 1) {
-    slots.push(formatSlot(hour));
+    slots.push({
+      id: `${hour}`,
+      label: formatSlot(hour),
+    });
   }
 
   return slots;
@@ -108,6 +116,29 @@ const PAYMENT_OPTIONS: {
   },
 ];
 
+interface TimeSlot {
+  id: string;
+  label: string;
+}
+
+const CURRENCY_CODE = "PHP";
+
+const formatCurrency = (amount: number): string => {
+  if (!Number.isFinite(amount)) {
+    return "₱0";
+  }
+
+  try {
+    return new Intl.NumberFormat("en-PH", {
+      style: "currency",
+      currency: CURRENCY_CODE,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch (error) {
+    return `₱${Math.round(amount).toLocaleString("en-PH")}`;
+  }
+};
+
 const generateTransactionReference = (method: PaymentMethod): string => {
   const prefix = method.slice(0, 2).toUpperCase();
   return `${prefix}-${Date.now().toString(36).toUpperCase()}`;
@@ -122,10 +153,41 @@ export default function BookAppointmentScreen({
 
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState<TimeSlot | null>(
+    null,
+  );
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
     useState<PaymentMethod | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const scheduleHomeRedirect = () => {
+    setTimeout(() => {
+      navigation.reset({ index: 0, routes: [{ name: "PatientHome" }] });
+    }, 600);
+  };
+  const clinicDescriptionCopy =
+    clinic.description || "Trusted neighborhood dental care.";
+  const clinicRatingCopy =
+    typeof clinic.rating === "number"
+      ? `${clinic.rating.toFixed(1)} rating`
+      : "Verified partner";
+  const clinicPatientsCopy =
+    typeof clinic.totalPatients === "number"
+      ? `${clinic.totalPatients}+ patients cared for`
+      : "Neighborhood favorite";
+
+  const selectedServicePrice = useMemo(() => {
+    if (!selectedService) {
+      return null;
+    }
+    return getServicePrice(selectedService);
+  }, [selectedService]);
+
+  const formattedSelectedServicePrice = useMemo(() => {
+    if (selectedServicePrice === null) {
+      return null;
+    }
+    return formatCurrency(selectedServicePrice);
+  }, [selectedServicePrice]);
 
   const selectedPaymentOption = useMemo(
     () =>
@@ -151,7 +213,7 @@ export default function BookAppointmentScreen({
     return dates;
   }, [clinic.operatingHours]);
 
-  const availableTimes = useMemo(() => {
+  const availableTimeSlots = useMemo(() => {
     if (!selectedDate) {
       return [];
     }
@@ -167,13 +229,16 @@ export default function BookAppointmentScreen({
   }, [clinic.operatingHours, selectedDate]);
 
   useEffect(() => {
-    if (selectedTime && !availableTimes.includes(selectedTime)) {
-      setSelectedTime(null);
+    if (
+      selectedTimeSlot &&
+      !availableTimeSlots.some((slot) => slot.id === selectedTimeSlot.id)
+    ) {
+      setSelectedTimeSlot(null);
     }
-  }, [availableTimes, selectedTime]);
+  }, [availableTimeSlots, selectedTimeSlot]);
 
-  const handleBookAppointment = () => {
-    if (!selectedService || !selectedDate || !selectedTime) {
+  const handleBookAppointment = async () => {
+    if (!selectedService || !selectedDate || !selectedTimeSlot) {
       Alert.alert("Incomplete", "Please select service, date, and time");
       return;
     }
@@ -188,36 +253,91 @@ export default function BookAppointmentScreen({
       return;
     }
 
-    const transactionId = generateTransactionReference(selectedPaymentMethod);
     const paymentLabel = selectedPaymentOption?.label || "your selected method";
+    const paymentAmount =
+      selectedServicePrice ?? getServicePrice(selectedService);
 
     setIsProcessingPayment(true);
     try {
-      createAppointment({
+      const baseAppointmentPayload = {
         patientId: user.id,
         patientName: user.name,
         clinicId: clinic.id,
         clinicName: clinic.name,
         dentistName: "Assigned Dentist",
         date: selectedDate,
-        time: selectedTime,
+        time: selectedTimeSlot.label,
         type: selectedService,
-        status: "pending",
+        status: "pending" as const,
         paymentMethod: selectedPaymentMethod,
-        paymentStatus: "paid",
-        transactionId,
-      });
+        amount: paymentAmount,
+        currency: CURRENCY_CODE,
+      };
 
-      Alert.alert(
-        "Payment Received",
-        `Your ${paymentLabel} payment was recorded (Ref: ${transactionId}). The clinic will confirm shortly.`,
-        [
-          {
-            text: "OK",
-            onPress: () => navigation.navigate("PatientHome"),
-          },
-        ],
-      );
+      if (selectedPaymentMethod === "paypal") {
+        const callbackUrl = Linking.createURL("paypal-success");
+        const cancelUrl = Linking.createURL("paypal-cancel");
+
+        const paypalOrder = await createPayPalOrder({
+          amount: paymentAmount,
+          currencyCode: CURRENCY_CODE,
+          description: `${selectedService} • ${clinic.name}`,
+          brandName: clinic.name,
+          returnUrl: callbackUrl,
+          cancelUrl,
+        });
+
+        const browserResult = await WebBrowser.openAuthSessionAsync(
+          paypalOrder.approvalUrl,
+          callbackUrl,
+        );
+
+        if (browserResult.type === "success" && browserResult.url) {
+          const parsed = Linking.parse(browserResult.url);
+          const tokenParam = parsed.queryParams?.token;
+          const transactionId =
+            typeof tokenParam === "string" && tokenParam.length > 0
+              ? tokenParam
+              : paypalOrder.orderId;
+
+          createAppointment({
+            ...baseAppointmentPayload,
+            paymentStatus: "paid",
+            transactionId,
+          });
+          Alert.alert(
+            "Payment Successful",
+            `Your PayPal payment was confirmed (Order: ${transactionId}). We'll take you back to your home dashboard.`,
+          );
+          scheduleHomeRedirect();
+        } else {
+          Alert.alert(
+            "Payment Cancelled",
+            "You closed PayPal before finishing the payment. No appointment was created.",
+          );
+        }
+      } else {
+        const transactionId = generateTransactionReference(
+          selectedPaymentMethod,
+        );
+
+        createAppointment({
+          ...baseAppointmentPayload,
+          paymentStatus: "paid",
+          transactionId,
+        });
+        Alert.alert(
+          "Payment Received",
+          `Your ${paymentLabel} payment was recorded (Ref: ${transactionId}). We'll take you back to your home dashboard.`,
+        );
+        scheduleHomeRedirect();
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while processing your payment.";
+      Alert.alert("Payment Error", message);
     } finally {
       setIsProcessingPayment(false);
     }
@@ -257,58 +377,112 @@ export default function BookAppointmentScreen({
         >
           <Ionicons name="arrow-back" size={24} color="#FFF" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Book Appointment</Text>
+        <View>
+          <Text style={styles.headerTitle}>Book Appointment</Text>
+          <Text style={styles.headerSubtitle}>Plan your next visit</Text>
+        </View>
         <View style={styles.placeholder} />
       </View>
 
-      <ScrollView style={styles.content}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.scrollContent}
+      >
         {/* Clinic Info */}
         <View style={styles.clinicInfo}>
           <View style={styles.clinicIcon}>
-            <Ionicons name="business" size={24} color="#00BFA6" />
+            <Ionicons name="business" size={24} color="#0F766E" />
           </View>
           <View style={styles.clinicDetails}>
             <Text style={styles.clinicName}>{clinic.name}</Text>
             <Text style={styles.clinicAddress}>{clinic.address}</Text>
+            {clinicDescriptionCopy ? (
+              <Text style={styles.clinicDescription} numberOfLines={2}>
+                {clinicDescriptionCopy}
+              </Text>
+            ) : null}
+            <View style={styles.clinicMetaRow}>
+              <View style={styles.clinicMetaPill}>
+                <Ionicons name="star" size={14} color="#FBBF24" />
+                <Text style={styles.clinicMetaText}>{clinicRatingCopy}</Text>
+              </View>
+              <View style={styles.clinicMetaPill}>
+                <Ionicons name="people" size={14} color="#0EA5E9" />
+                <Text style={styles.clinicMetaText}>{clinicPatientsCopy}</Text>
+              </View>
+            </View>
           </View>
         </View>
 
         {/* Select Service */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Service</Text>
+          <Text style={styles.sectionHelper}>
+            Choose the treatment you want to book.
+          </Text>
           <View style={styles.servicesGrid}>
-            {clinic.servicesOffered.map((service, index) => (
-              <TouchableOpacity
-                key={index}
-                style={[
-                  styles.serviceCard,
-                  selectedService === service && styles.serviceCardSelected,
-                ]}
-                onPress={() => setSelectedService(service)}
-              >
-                <Ionicons
-                  name={
-                    selectedService === service ? "checkmark-circle" : "medical"
-                  }
-                  size={24}
-                  color={selectedService === service ? "#00BFA6" : "#666"}
-                />
-                <Text
+            {clinic.servicesOffered.map((service, index) => {
+              const price = getServicePrice(service);
+              const formattedPrice = formatCurrency(price);
+              const isSelected = selectedService === service;
+
+              return (
+                <TouchableOpacity
+                  key={index}
                   style={[
-                    styles.serviceText,
-                    selectedService === service && styles.serviceTextSelected,
+                    styles.serviceCard,
+                    isSelected && styles.serviceCardSelected,
                   ]}
+                  onPress={() => setSelectedService(service)}
                 >
-                  {service}
-                </Text>
-              </TouchableOpacity>
-            ))}
+                  <View style={styles.serviceCardHeader}>
+                    <View
+                      style={[
+                        styles.serviceIconBadge,
+                        isSelected && styles.serviceIconBadgeSelected,
+                      ]}
+                    >
+                      <Ionicons
+                        name="medical"
+                        size={20}
+                        color={isSelected ? "#0F766E" : "#6B7280"}
+                      />
+                    </View>
+                    {isSelected && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color="#0EA5E9"
+                      />
+                    )}
+                  </View>
+                  <View style={styles.serviceCopyGroup}>
+                    <Text
+                      style={[
+                        styles.serviceText,
+                        isSelected && styles.serviceTextSelected,
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {service}
+                    </Text>
+                    <Text style={styles.servicePrice}>{formattedPrice}</Text>
+                    <Text style={styles.serviceHelperText}>
+                      {isSelected ? "Selected" : "Tap to choose"}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         </View>
 
         {/* Select Date */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Date</Text>
+          <Text style={styles.sectionHelper}>
+            Available within the next two weeks.
+          </Text>
           {availableDates.length === 0 ? (
             <View style={styles.inlineMessageCard}>
               <Text style={styles.inlineMessageText}>
@@ -366,13 +540,16 @@ export default function BookAppointmentScreen({
         {/* Select Time */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Select Time</Text>
+          <Text style={styles.sectionHelper}>
+            Times adjust automatically based on your chosen day.
+          </Text>
           {!selectedDate ? (
             <View style={styles.inlineMessageCard}>
               <Text style={styles.inlineMessageText}>
                 Select an available day first.
               </Text>
             </View>
-          ) : availableTimes.length === 0 ? (
+          ) : availableTimeSlots.length === 0 ? (
             <View style={styles.inlineMessageCard}>
               <Text style={styles.inlineMessageText}>
                 No available time slots for this day.
@@ -380,27 +557,28 @@ export default function BookAppointmentScreen({
             </View>
           ) : (
             <View style={styles.timesGrid}>
-              {availableTimes.map((time, index) => (
+              {availableTimeSlots.map((slot) => (
                 <TouchableOpacity
-                  key={index}
+                  key={slot.id}
                   style={[
                     styles.timeCard,
-                    selectedTime === time && styles.timeCardSelected,
+                    selectedTimeSlot?.id === slot.id && styles.timeCardSelected,
                   ]}
-                  onPress={() => setSelectedTime(time)}
+                  onPress={() => setSelectedTimeSlot(slot)}
                 >
                   <Ionicons
                     name="time"
                     size={18}
-                    color={selectedTime === time ? "#FFF" : "#666"}
+                    color={selectedTimeSlot?.id === slot.id ? "#FFF" : "#666"}
                   />
                   <Text
                     style={[
                       styles.timeText,
-                      selectedTime === time && styles.timeTextSelected,
+                      selectedTimeSlot?.id === slot.id &&
+                        styles.timeTextSelected,
                     ]}
                   >
-                    {time}
+                    {slot.label}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -411,6 +589,9 @@ export default function BookAppointmentScreen({
         {/* Payment */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
+          <Text style={styles.sectionHelper}>
+            Pay now to secure your slot instantly.
+          </Text>
           <View style={styles.paymentGrid}>
             {PAYMENT_OPTIONS.map((option) => {
               const isSelected = selectedPaymentMethod === option.key;
@@ -464,7 +645,12 @@ export default function BookAppointmentScreen({
             })}
           </View>
           <View style={styles.paymentHint}>
-            <Ionicons name="shield-checkmark" size={16} color="#10B981" />
+            <Ionicons
+              name="shield-checkmark"
+              size={16}
+              color="#10B981"
+              style={styles.paymentHintIcon}
+            />
             <Text style={styles.paymentHintText}>
               Secure payments. Your transaction will be saved with the
               appointment record.
@@ -473,7 +659,7 @@ export default function BookAppointmentScreen({
         </View>
 
         {/* Summary */}
-        {selectedService && selectedDate && selectedTime && (
+        {selectedService && selectedDate && selectedTimeSlot && (
           <View style={styles.summary}>
             <Text style={styles.summaryTitle}>Appointment Summary</Text>
             <View style={styles.summaryRow}>
@@ -486,7 +672,7 @@ export default function BookAppointmentScreen({
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Time:</Text>
-              <Text style={styles.summaryValue}>{selectedTime}</Text>
+              <Text style={styles.summaryValue}>{selectedTimeSlot.label}</Text>
             </View>
             {selectedPaymentOption ? (
               <View style={styles.summaryRow}>
@@ -503,18 +689,39 @@ export default function BookAppointmentScreen({
                 </View>
               </View>
             ) : null}
+            {formattedSelectedServicePrice ? (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Price:</Text>
+                <Text style={styles.summaryValue}>
+                  {formattedSelectedServicePrice}
+                </Text>
+              </View>
+            ) : null}
           </View>
         )}
       </ScrollView>
 
       {/* Book Button */}
       <View style={styles.footer}>
+        <View style={styles.footerSummaryRow}>
+          <View>
+            <Text style={styles.totalLabel}>Total Due</Text>
+            <Text style={styles.totalHelper}>
+              {selectedPaymentMethod === "paypal"
+                ? "Redirects to PayPal Sandbox"
+                : "Payment recorded instantly"}
+            </Text>
+          </View>
+          <Text style={styles.totalValue}>
+            {formattedSelectedServicePrice ?? "—"}
+          </Text>
+        </View>
         <TouchableOpacity
           style={[
             styles.bookButton,
             (!selectedService ||
               !selectedDate ||
-              !selectedTime ||
+              !selectedTimeSlot ||
               !selectedPaymentMethod ||
               isProcessingPayment) &&
               styles.bookButtonDisabled,
@@ -523,7 +730,7 @@ export default function BookAppointmentScreen({
           disabled={
             !selectedService ||
             !selectedDate ||
-            !selectedTime ||
+            !selectedTimeSlot ||
             !selectedPaymentMethod ||
             isProcessingPayment
           }
@@ -540,13 +747,13 @@ export default function BookAppointmentScreen({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F5F5F5",
+    backgroundColor: "#F8FAFC",
   },
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    backgroundColor: "#00BFA6",
+    backgroundColor: "#0EB8A4",
     paddingTop: 60,
     paddingHorizontal: 20,
     paddingBottom: 20,
@@ -559,19 +766,36 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#FFF",
   },
+  headerSubtitle: {
+    fontSize: 13,
+    color: "#ECFEFF",
+    marginTop: 4,
+  },
   placeholder: {
     width: 40,
   },
   content: {
     flex: 1,
   },
+  scrollContent: {
+    paddingBottom: 32,
+  },
   clinicInfo: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "#FFF",
-    margin: 20,
-    padding: 16,
-    borderRadius: 12,
+    marginHorizontal: 20,
+    marginTop: 20,
+    marginBottom: 10,
+    padding: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E0F2F1",
+    shadowColor: "#0F766E",
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
   },
   clinicIcon: {
     width: 50,
@@ -595,6 +819,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#666",
   },
+  clinicDescription: {
+    fontSize: 12,
+    color: "#4B5563",
+    marginTop: 6,
+  },
+  clinicMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 10,
+  },
+  clinicMetaPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#F1F5F9",
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  clinicMetaText: {
+    fontSize: 12,
+    color: "#1F2937",
+  },
   section: {
     paddingHorizontal: 20,
     marginBottom: 25,
@@ -604,6 +852,12 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#333",
     marginBottom: 15,
+  },
+  sectionHelper: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: -10,
+    marginBottom: 16,
   },
   inlineMessageCard: {
     backgroundColor: "#FFF",
@@ -620,32 +874,63 @@ const styles = StyleSheet.create({
   servicesGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    justifyContent: "space-between",
   },
   serviceCard: {
-    flexDirection: "row",
-    alignItems: "center",
+    width: "48%",
     backgroundColor: "#FFF",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: "#E0E0E0",
-    marginRight: 8,
-    marginBottom: 8,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    marginBottom: 14,
   },
   serviceCardSelected: {
-    backgroundColor: "#E0F7F4",
-    borderColor: "#00BFA6",
+    borderColor: "#0EB8A4",
+    shadowColor: "#0EB8A4",
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  serviceCardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  serviceIconBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  serviceIconBadgeSelected: {
+    backgroundColor: "#CCFBF1",
+  },
+  serviceCopyGroup: {
+    minHeight: 60,
   },
   serviceText: {
-    fontSize: 14,
-    color: "#666",
-    marginLeft: 8,
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0F172A",
   },
   serviceTextSelected: {
-    color: "#00BFA6",
-    fontWeight: "600",
+    color: "#0F766E",
+  },
+  servicePrice: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 8,
+    fontWeight: "500",
+  },
+  serviceHelperText: {
+    fontSize: 12,
+    color: "#94A3B8",
+    marginTop: 6,
   },
   datesScroll: {
     marginHorizontal: -20,
@@ -687,10 +972,9 @@ const styles = StyleSheet.create({
   timesGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
   },
   paymentGrid: {
-    gap: 12,
+    marginTop: 4,
   },
   paymentCard: {
     flexDirection: "row",
@@ -700,7 +984,7 @@ const styles = StyleSheet.create({
     padding: 14,
     borderWidth: 2,
     borderColor: "#E5E7EB",
-    gap: 14,
+    marginBottom: 12,
   },
   paymentCardSelected: {
     borderColor: "#00BFA6",
@@ -713,6 +997,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     borderWidth: 2,
+    marginRight: 12,
   },
   paymentCardBody: {
     flex: 1,
@@ -743,13 +1028,43 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     padding: 12,
     marginTop: 12,
-    gap: 8,
+  },
+  paymentHintIcon: {
+    marginRight: 8,
+    marginTop: 2,
   },
   paymentHintText: {
     flex: 1,
     color: "#047857",
     fontSize: 13,
     lineHeight: 18,
+  },
+  footer: {
+    padding: 20,
+    backgroundColor: "#FFF",
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0",
+    gap: 12,
+  },
+  footerSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  totalLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  totalHelper: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 2,
+  },
+  totalValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#00BFA6",
   },
   timeCard: {
     flexDirection: "row",
@@ -777,16 +1092,23 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   summary: {
-    backgroundColor: "#E3F2FD",
+    backgroundColor: "#FFF",
     marginHorizontal: 20,
-    padding: 16,
-    borderRadius: 12,
+    padding: 18,
+    borderRadius: 16,
     marginBottom: 20,
+    borderWidth: 1,
+    borderColor: "#E0E7FF",
+    shadowColor: "#312E81",
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
   },
   summaryTitle: {
     fontSize: 16,
-    fontWeight: "bold",
-    color: "#1976D2",
+    fontWeight: "700",
+    color: "#1D4ED8",
     marginBottom: 12,
   },
   summaryRow: {
@@ -797,33 +1119,27 @@ const styles = StyleSheet.create({
   paymentSummaryBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFF",
+    backgroundColor: "#EEF2FF",
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 20,
-    borderWidth: 1,
-    borderColor: "#BFDBFE",
-    gap: 6,
+    borderWidth: 0,
+    marginLeft: 8,
   },
   paymentSummaryText: {
     fontSize: 13,
-    color: "#1E3A8A",
+    color: "#312E81",
     fontWeight: "600",
+    marginLeft: 6,
   },
   summaryLabel: {
     fontSize: 14,
-    color: "#666",
+    color: "#6B7280",
   },
   summaryValue: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#333",
-  },
-  footer: {
-    padding: 20,
-    backgroundColor: "#FFF",
-    borderTopWidth: 1,
-    borderTopColor: "#E0E0E0",
+    color: "#0F172A",
   },
   bookButton: {
     backgroundColor: "#00BFA6",

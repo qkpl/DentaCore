@@ -1,32 +1,32 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  DocumentData,
-  getDocs,
-  query,
-  QueryDocumentSnapshot,
-  setDoc,
-  updateDoc,
-  where,
+    addDoc,
+    collection,
+    deleteDoc,
+    doc,
+    DocumentData,
+    getDocs,
+    query,
+    QueryDocumentSnapshot,
+    setDoc,
+    updateDoc,
+    where,
 } from "firebase/firestore";
 import {
-  Appointment,
-  Clinic,
-  ClinicReview,
-  DentalRecord,
-  mockAppointments,
-  mockClinicReviews,
-  mockClinics,
-  mockDentalRecords,
-  mockStaffMembers,
-  mockUsers,
-  PaymentMethod,
-  PaymentStatus,
-  StaffMember,
-  User,
+    Appointment,
+    Clinic,
+    ClinicReview,
+    DentalRecord,
+    mockAppointments,
+    mockClinicReviews,
+    mockClinics,
+    mockDentalRecords,
+    mockStaffMembers,
+    mockUsers,
+    PaymentMethod,
+    PaymentStatus,
+    StaffMember,
+    User,
 } from "../data/mockData";
 import { db } from "./firebase";
 
@@ -131,18 +131,43 @@ const paymentStatuses: PaymentStatus[] = [
   "failed",
 ];
 
+const DEFAULT_SERVICE_PRICE = 2600;
+
 const appointmentPriceLookup: Record<string, number> = {
   "dental cleaning": 2800,
+  "teeth cleaning": 2500,
   checkup: 1800,
-  "root canal": 7200,
   "dental checkup": 1800,
-  "teeth whitening": 4200,
+  "routine checkup": 1800,
+  "root canal": 7200,
   orthodontics: 9500,
+  braces: 9500,
   filling: 3200,
+  "dental filling": 3200,
   extraction: 3500,
+  "tooth extraction": 3500,
   implants: 12500,
+  "dental implants": 12500,
+  "teeth whitening": 4200,
+  whitening: 4200,
   "cosmetic dentistry": 6800,
   "general dentistry": 2500,
+  "preventive care": 2100,
+  "restorative dentistry": 5400,
+  "pediatric dentistry": 3000,
+  "emergency care": 4000,
+};
+
+const normalizeServiceKey = (value: string): string =>
+  value.trim().toLowerCase();
+
+export const getServicePrice = (serviceName?: string | null): number => {
+  if (!serviceName) {
+    return DEFAULT_SERVICE_PRICE;
+  }
+
+  const key = normalizeServiceKey(serviceName);
+  return appointmentPriceLookup[key] ?? DEFAULT_SERVICE_PRICE;
 };
 
 const monthNames = [
@@ -171,8 +196,7 @@ const defaultOperatingHours = {
 };
 
 const estimateAppointmentValue = (appointment: Appointment): number => {
-  const key = appointment.type.toLowerCase();
-  const base = appointmentPriceLookup[key] ?? 2600;
+  const base = getServicePrice(appointment.type);
 
   switch (appointment.status) {
     case "completed":

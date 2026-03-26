@@ -1,41 +1,44 @@
 import { Clinic, mockClinics, mockUsers, User } from "@/data/mockData";
 import {
-  activateClinic,
-  getClinicById,
-  syncAdminRelationships,
-  syncAppointmentsFromFirestore,
-  updateUser as updateUserCache,
+    activateClinic,
+    getClinicById,
+    syncAdminRelationships,
+    syncAppointmentsFromFirestore,
+    updateUser as updateUserCache,
 } from "@/services/dataService";
 import { auth, db } from "@/services/firebase";
 import {
-  createUserWithEmailAndPassword,
-  EmailAuthProvider,
-  onAuthStateChanged,
-  reauthenticateWithCredential,
-  signInWithEmailAndPassword,
-  signOut,
-  updatePassword,
+    createUserWithEmailAndPassword,
+    EmailAuthProvider,
+    onAuthStateChanged,
+    reauthenticateWithCredential,
+    signInWithEmailAndPassword,
+    signOut,
+    updatePassword,
 } from "firebase/auth";
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
+    collection,
+    doc,
+    getDoc,
+    getDocs,
+    setDoc,
+    updateDoc,
 } from "firebase/firestore";
 import React, {
-  createContext,
-  ReactNode,
-  useContext,
-  useEffect,
-  useState,
+    createContext,
+    ReactNode,
+    useContext,
+    useEffect,
+    useState,
 } from "react";
 
 interface AuthResponse {
   success: boolean;
   message: string;
 }
+
+const SHOULD_SEED_ADMIN_AUTH =
+  process.env.EXPO_PUBLIC_ENABLE_ADMIN_AUTH_SEED === "true";
 
 interface AuthContextType {
   user: User | null;
@@ -134,7 +137,12 @@ const ensureDefaultAdminUser = async (): Promise<void> => {
 
     if (!snapshot.exists()) {
       await setDoc(adminDocRef, adminTemplate);
-      await ensureAdminAuthAccount(adminTemplate.email, adminTemplate.password);
+      if (SHOULD_SEED_ADMIN_AUTH) {
+        await ensureAdminAuthAccount(
+          adminTemplate.email,
+          adminTemplate.password,
+        );
+      }
       return;
     }
 
@@ -150,7 +158,9 @@ const ensureDefaultAdminUser = async (): Promise<void> => {
       await setDoc(adminDocRef, adminTemplate, { merge: true });
     }
 
-    await ensureAdminAuthAccount(adminTemplate.email, adminTemplate.password);
+    if (SHOULD_SEED_ADMIN_AUTH) {
+      await ensureAdminAuthAccount(adminTemplate.email, adminTemplate.password);
+    }
   } catch (error) {
     // Ignore failures when seeding admin account to keep offline support working.
   }

@@ -71,6 +71,8 @@ export interface Appointment {
   paymentMethod?: PaymentMethod;
   paymentStatus?: PaymentStatus;
   transactionId?: string;
+  amount?: number;
+  currency?: string;
   cancellationReason?: string;
 }
 
