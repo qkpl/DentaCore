@@ -4,6 +4,7 @@ import * as WebBrowser from "expo-web-browser";
 import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -121,6 +122,14 @@ interface TimeSlot {
   label: string;
 }
 
+interface PaymentSuccessState {
+  title: string;
+  message: string;
+  transactionId: string;
+  paymentLabel: string;
+  amountLabel: string;
+}
+
 const CURRENCY_CODE = "PHP";
 
 const formatCurrency = (amount: number): string => {
@@ -159,11 +168,30 @@ export default function BookAppointmentScreen({
   const [selectedPaymentMethod, setSelectedPaymentMethod] =
     useState<PaymentMethod | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
-  const scheduleHomeRedirect = () => {
-    setTimeout(() => {
-      navigation.reset({ index: 0, routes: [{ name: "PatientHome" }] });
-    }, 600);
+  const [paymentSuccessState, setPaymentSuccessState] =
+    useState<PaymentSuccessState | null>(null);
+
+  const handleDismissPaymentSuccess = () => {
+    setPaymentSuccessState(null);
+    navigation.reset({ index: 0, routes: [{ name: "PatientHome" }] });
   };
+
+  const showPaymentSuccessModal = (
+    title: string,
+    message: string,
+    transactionId: string,
+    paymentLabel: string,
+    amount: number,
+  ) => {
+    setPaymentSuccessState({
+      title,
+      message,
+      transactionId,
+      paymentLabel,
+      amountLabel: formatCurrency(amount),
+    });
+  };
+
   const clinicDescriptionCopy =
     clinic.description || "Trusted neighborhood dental care.";
   const clinicRatingCopy =
@@ -305,11 +333,13 @@ export default function BookAppointmentScreen({
             paymentStatus: "paid",
             transactionId,
           });
-          Alert.alert(
+          showPaymentSuccessModal(
             "Payment Successful",
-            `Your PayPal payment was confirmed (Order: ${transactionId}). We'll take you back to your home dashboard.`,
+            "Your PayPal payment was confirmed and your slot is now secured.",
+            transactionId,
+            "PayPal",
+            paymentAmount,
           );
-          scheduleHomeRedirect();
         } else {
           Alert.alert(
             "Payment Cancelled",
@@ -326,11 +356,13 @@ export default function BookAppointmentScreen({
           paymentStatus: "paid",
           transactionId,
         });
-        Alert.alert(
+        showPaymentSuccessModal(
           "Payment Received",
-          `Your ${paymentLabel} payment was recorded (Ref: ${transactionId}). We'll take you back to your home dashboard.`,
+          `Your ${paymentLabel} payment was recorded and your appointment is confirmed.`,
+          transactionId,
+          paymentLabel,
+          paymentAmount,
         );
-        scheduleHomeRedirect();
       }
     } catch (error) {
       const message =
@@ -700,6 +732,56 @@ export default function BookAppointmentScreen({
           </View>
         )}
       </ScrollView>
+
+      <Modal
+        visible={Boolean(paymentSuccessState)}
+        transparent
+        animationType="fade"
+        onRequestClose={handleDismissPaymentSuccess}
+      >
+        <View style={styles.successModalOverlay}>
+          <View style={styles.successModalCard}>
+            <View style={styles.successIconWrap}>
+              <Ionicons name="checkmark-circle" size={54} color="#10B981" />
+            </View>
+            <Text style={styles.successTitle}>
+              {paymentSuccessState?.title ?? "Payment Successful"}
+            </Text>
+            <Text style={styles.successMessage}>
+              {paymentSuccessState?.message ??
+                "Payment confirmed. Your appointment has been created."}
+            </Text>
+
+            <View style={styles.successMetaCard}>
+              <View style={styles.successMetaRow}>
+                <Text style={styles.successMetaLabel}>Reference</Text>
+                <Text style={styles.successMetaValue}>
+                  {paymentSuccessState?.transactionId}
+                </Text>
+              </View>
+              <View style={styles.successMetaRow}>
+                <Text style={styles.successMetaLabel}>Method</Text>
+                <Text style={styles.successMetaValue}>
+                  {paymentSuccessState?.paymentLabel}
+                </Text>
+              </View>
+              <View style={[styles.successMetaRow, styles.successMetaRowLast]}>
+                <Text style={styles.successMetaLabel}>Paid</Text>
+                <Text style={styles.successAmount}>
+                  {paymentSuccessState?.amountLabel}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.successPrimaryButton}
+              onPress={handleDismissPaymentSuccess}
+            >
+              <Text style={styles.successPrimaryButtonText}>Back to Home</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Book Button */}
       <View style={styles.footer}>
@@ -1154,5 +1236,89 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  successModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(2, 6, 23, 0.48)",
+    justifyContent: "center",
+    paddingHorizontal: 22,
+  },
+  successModalCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 22,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 18,
+    shadowColor: "#0F172A",
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 14 },
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  successIconWrap: {
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  successTitle: {
+    fontSize: 25,
+    lineHeight: 30,
+    fontWeight: "800",
+    color: "#052E2B",
+    textAlign: "center",
+  },
+  successMessage: {
+    marginTop: 8,
+    fontSize: 15,
+    lineHeight: 22,
+    color: "#334155",
+    textAlign: "center",
+  },
+  successMetaCard: {
+    marginTop: 18,
+    backgroundColor: "#F8FAFC",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  successMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  successMetaRowLast: {
+    borderBottomWidth: 0,
+  },
+  successMetaLabel: {
+    fontSize: 13,
+    color: "#64748B",
+    fontWeight: "600",
+  },
+  successMetaValue: {
+    fontSize: 13,
+    color: "#0F172A",
+    fontWeight: "700",
+    maxWidth: "62%",
+  },
+  successAmount: {
+    fontSize: 16,
+    color: "#047857",
+    fontWeight: "800",
+  },
+  successPrimaryButton: {
+    marginTop: 18,
+    backgroundColor: "#0EA5A4",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  successPrimaryButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "800",
   },
 });

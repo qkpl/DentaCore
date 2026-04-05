@@ -2,23 +2,24 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Alert,
-  Image,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Image,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Appointment, ClinicReview } from "../../data/mockData";
 import {
-  cancelAppointment,
-  getAppointmentsByPatient,
-  getClinicReviewsByPatient,
-  submitClinicReview,
+    cancelAppointment,
+    deleteAppointment,
+    getAppointmentsByPatient,
+    getClinicReviewsByPatient,
+    submitClinicReview,
 } from "../../services/dataService";
 import RescheduleAppointmentScreen from "./RescheduleAppointmentScreen";
 
@@ -67,6 +68,8 @@ export default function AppointmentsScreen({
     Record<string, ClinicReview>
   >({});
   const [reviewModalVisible, setReviewModalVisible] = useState(false);
+  const [detailsModalVisible, setDetailsModalVisible] = useState(false);
+  const [detailsTarget, setDetailsTarget] = useState<Appointment | null>(null);
   const [reviewTarget, setReviewTarget] = useState<Appointment | null>(null);
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewComment, setReviewComment] = useState("");
@@ -174,16 +177,30 @@ export default function AppointmentsScreen({
   };
 
   const handleViewDetails = (appointment: Appointment) => {
-    const reasonLine =
-      appointment.status === "cancelled" && appointment.cancellationReason
-        ? `\nReason: ${appointment.cancellationReason}`
-        : "";
-    Alert.alert(
-      "Appointment Details",
-      `Clinic: ${appointment.clinicName}\nDoctor: ${formatDentistName(appointment.dentistName)}\nType: ${appointment.type}\nDate: ${appointment.date}\nTime: ${appointment.time}\nStatus: ${appointment.status}${reasonLine}`,
-      [{ text: "OK" }],
-    );
+    setDetailsTarget(appointment);
+    setDetailsModalVisible(true);
   };
+
+  const closeDetailsModal = () => {
+    setDetailsModalVisible(false);
+    setDetailsTarget(null);
+  };
+
+  const formatPaymentMethod = (method?: Appointment["paymentMethod"]) => {
+    if (!method) {
+      return "Not specified";
+    }
+    if (method === "gcash") {
+      return "GCash";
+    }
+    if (method === "paypal") {
+      return "PayPal";
+    }
+    return "Credit / Debit Card";
+  };
+
+  const formatStatusLabel = (status: string) =>
+    status.charAt(0).toUpperCase() + status.slice(1);
 
   const handleReschedule = (appointment: Appointment) => {
     setSelectedAppointment(appointment);
@@ -232,6 +249,32 @@ export default function AppointmentsScreen({
       "Appointment rescheduled. Waiting for clinic confirmation.",
     );
     setTimeout(() => setFeedbackMessage(""), 2400);
+  };
+
+  const handleDeleteAppointment = (appointment: Appointment) => {
+    Alert.alert(
+      "Delete Appointment",
+      `Delete this appointment with ${appointment.clinicName}? This action cannot be undone.`,
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const success = await deleteAppointment(appointment.id);
+            if (success) {
+              setFeedbackMessage("Appointment deleted.");
+              setRefreshTrigger((prev) => prev + 1);
+            } else {
+              setFeedbackMessage(
+                "Delete failed. Please check your connection and try again.",
+              );
+            }
+            setTimeout(() => setFeedbackMessage(""), 2400);
+          },
+        },
+      ],
+    );
   };
 
   const getReviewForAppointment = (appointmentId: string) =>
@@ -565,8 +608,11 @@ export default function AppointmentsScreen({
                       appointment.status === "pending" ||
                       appointment.status === "confirmed";
                     const canCancel = appointment.status === "pending";
+                    const canDelete =
+                      appointment.status === "completed" ||
+                      appointment.status === "cancelled";
 
-                    if (!canReschedule && !canCancel) {
+                    if (!canReschedule && !canCancel && !canDelete) {
                       return null;
                     }
 
@@ -594,6 +640,25 @@ export default function AppointmentsScreen({
                             <Ionicons name="close" size={14} color="#FFF" />
                             <Text style={styles.secondaryActionText}>
                               Cancel
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        {canDelete && (
+                          <TouchableOpacity
+                            style={[
+                              styles.secondaryActionButton,
+                              styles.secondaryDanger,
+                              styles.secondaryDelete,
+                            ]}
+                            onPress={() => handleDeleteAppointment(appointment)}
+                          >
+                            <Ionicons
+                              name="trash-outline"
+                              size={14}
+                              color="#FFF"
+                            />
+                            <Text style={styles.secondaryActionText}>
+                              Delete
                             </Text>
                           </TouchableOpacity>
                         )}
@@ -688,6 +753,133 @@ export default function AppointmentsScreen({
         onClose={() => setRescheduleModalVisible(false)}
         onSuccess={handleRescheduleSuccess}
       />
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={detailsModalVisible}
+        onRequestClose={closeDetailsModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.detailsModalCard}>
+            <View style={styles.detailsModalHeader}>
+              <View>
+                <Text style={styles.detailsModalTitle}>
+                  Appointment Details
+                </Text>
+                <Text style={styles.detailsModalSubtitle}>
+                  {detailsTarget?.clinicName}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeDetailsModal}>
+                <Ionicons name="close" size={22} color="#64748B" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.detailsStatusPillWrap}>
+              <View
+                style={[
+                  styles.detailsStatusPill,
+                  {
+                    backgroundColor:
+                      STATUS_COLORS[detailsTarget?.status || "pending"].bg,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name={STATUS_COLORS[detailsTarget?.status || "pending"].icon}
+                  size={15}
+                  color={
+                    STATUS_COLORS[detailsTarget?.status || "pending"].color
+                  }
+                />
+                <Text
+                  style={[
+                    styles.detailsStatusText,
+                    {
+                      color:
+                        STATUS_COLORS[detailsTarget?.status || "pending"].color,
+                    },
+                  ]}
+                >
+                  {formatStatusLabel(detailsTarget?.status || "pending")}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsGroup}>
+              <Text style={styles.detailsSectionTitle}>Visit Info</Text>
+              <View style={styles.detailsRow}>
+                <Ionicons name="medkit-outline" size={16} color="#0EA5A4" />
+                <Text style={styles.detailsValue}>{detailsTarget?.type}</Text>
+              </View>
+              <View style={styles.detailsRow}>
+                <Ionicons name="calendar-outline" size={16} color="#0EA5A4" />
+                <Text style={styles.detailsValue}>{detailsTarget?.date}</Text>
+              </View>
+              <View style={styles.detailsRow}>
+                <Ionicons name="time-outline" size={16} color="#0EA5A4" />
+                <Text style={styles.detailsValue}>{detailsTarget?.time}</Text>
+              </View>
+              <View style={styles.detailsRow}>
+                <Ionicons
+                  name="person-circle-outline"
+                  size={16}
+                  color="#0EA5A4"
+                />
+                <Text style={styles.detailsValue}>
+                  {formatDentistName(detailsTarget?.dentistName)}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsGroup}>
+              <Text style={styles.detailsSectionTitle}>Payment</Text>
+              <View style={styles.detailsRowBetween}>
+                <Text style={styles.detailsLabel}>Method</Text>
+                <Text style={styles.detailsValueStrong}>
+                  {formatPaymentMethod(detailsTarget?.paymentMethod)}
+                </Text>
+              </View>
+              <View style={styles.detailsRowBetween}>
+                <Text style={styles.detailsLabel}>Payment Status</Text>
+                <Text style={styles.detailsValueStrong}>
+                  {formatStatusLabel(detailsTarget?.paymentStatus || "pending")}
+                </Text>
+              </View>
+              {detailsTarget?.transactionId ? (
+                <View style={styles.detailsRowBetween}>
+                  <Text style={styles.detailsLabel}>Reference</Text>
+                  <Text style={styles.detailsReference}>
+                    {detailsTarget.transactionId}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+
+            {detailsTarget?.status === "cancelled" &&
+            detailsTarget.cancellationReason ? (
+              <View style={styles.detailsWarningBox}>
+                <Ionicons
+                  name="alert-circle-outline"
+                  size={16}
+                  color="#B45309"
+                />
+                <Text style={styles.detailsWarningText}>
+                  {detailsTarget.cancellationReason}
+                </Text>
+              </View>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.detailsCloseButton}
+              onPress={closeDetailsModal}
+            >
+              <Text style={styles.detailsCloseButtonText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         animationType="slide"
@@ -1014,6 +1206,9 @@ const styles = StyleSheet.create({
   secondaryDanger: {
     backgroundColor: "#EF4444",
   },
+  secondaryDelete: {
+    backgroundColor: "#B91C1C",
+  },
   secondaryActionText: {
     color: "#FFF",
     fontSize: 12,
@@ -1139,6 +1334,116 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(15, 23, 42, 0.35)",
     justifyContent: "center",
     padding: 20,
+  },
+  detailsModalCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 20,
+    padding: 20,
+    gap: 14,
+  },
+  detailsModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  detailsModalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  detailsModalSubtitle: {
+    marginTop: 3,
+    fontSize: 14,
+    color: "#64748B",
+    maxWidth: 260,
+  },
+  detailsStatusPillWrap: {
+    flexDirection: "row",
+  },
+  detailsStatusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 6,
+  },
+  detailsStatusText: {
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  detailsGroup: {
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 14,
+    padding: 12,
+    gap: 9,
+  },
+  detailsSectionTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  detailsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  detailsRowBetween: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  detailsLabel: {
+    fontSize: 13,
+    color: "#64748B",
+  },
+  detailsValue: {
+    flex: 1,
+    fontSize: 14,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+  detailsValueStrong: {
+    fontSize: 13,
+    color: "#0F172A",
+    fontWeight: "700",
+  },
+  detailsReference: {
+    flex: 1,
+    textAlign: "right",
+    fontSize: 12,
+    color: "#334155",
+    fontWeight: "700",
+  },
+  detailsWarningBox: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    backgroundColor: "#FFFBEB",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  detailsWarningText: {
+    flex: 1,
+    fontSize: 12,
+    color: "#92400E",
+    lineHeight: 17,
+  },
+  detailsCloseButton: {
+    marginTop: 2,
+    backgroundColor: "#0EA5A4",
+    borderRadius: 12,
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  detailsCloseButtonText: {
+    color: "#FFF",
+    fontSize: 14,
+    fontWeight: "700",
   },
   reviewModalCard: {
     backgroundColor: "#FFF",

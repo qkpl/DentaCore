@@ -79,6 +79,17 @@ const appendLocalRecord = async (record: DentalRecord) => {
   await persistLocalRecords(cache);
 };
 
+const deleteLocalRecord = async (recordId: string): Promise<boolean> => {
+  const cache = await loadLocalRecords();
+  const filtered = cache.filter((record) => record.id !== recordId);
+  if (filtered.length === cache.length) {
+    return false;
+  }
+
+  await persistLocalRecords(filtered);
+  return true;
+};
+
 const replaceAppointmentsCache = (appointments: Appointment[]) => {
   mockAppointments.splice(0, mockAppointments.length, ...appointments);
 };
@@ -894,16 +905,22 @@ export const updateAppointment = (
   return false;
 };
 
-export const deleteAppointment = (appointmentId: string): boolean => {
+export const deleteAppointment = async (
+  appointmentId: string,
+): Promise<boolean> => {
   const index = mockAppointments.findIndex((apt) => apt.id === appointmentId);
-  if (index !== -1) {
-    mockAppointments.splice(index, 1);
-    void deleteDoc(doc(db, "appointments", appointmentId)).catch((error) => {
-      console.warn("Failed to delete appointment in Firestore", error);
-    });
-    return true;
+  if (index === -1) {
+    return false;
   }
-  return false;
+
+  try {
+    await deleteDoc(doc(db, "appointments", appointmentId));
+    mockAppointments.splice(index, 1);
+    return true;
+  } catch (error) {
+    console.warn("Failed to delete appointment in Firestore", error);
+    return false;
+  }
 };
 
 export const cancelAppointment = (
@@ -1009,6 +1026,25 @@ export const createDentalRecord = async (
 
   await appendLocalRecord(savedRecord);
   return savedRecord;
+};
+
+export const deleteDentalRecord = async (
+  recordId: string,
+): Promise<boolean> => {
+  try {
+    await deleteDoc(doc(db, "patientRecords", recordId));
+    const recordIndex = mockDentalRecords.findIndex(
+      (record) => record.id === recordId,
+    );
+    if (recordIndex !== -1) {
+      mockDentalRecords.splice(recordIndex, 1);
+    }
+    await deleteLocalRecord(recordId);
+    return true;
+  } catch (error) {
+    console.warn("Failed to delete dental record in Firestore", error);
+    return false;
+  }
 };
 
 // Staff Services -----------------------------------------------------------

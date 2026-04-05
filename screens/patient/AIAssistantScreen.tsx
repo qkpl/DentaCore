@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Location from "expo-location";
 import { useState } from "react";
 import {
     KeyboardAvoidingView,
@@ -10,12 +11,20 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { Clinic } from "../../data/mockData";
+import { getAllClinics } from "../../services/dataService";
+
+interface ClinicRecommendation {
+  clinic: Clinic;
+  distanceKm: number;
+}
 
 interface Message {
   id: string;
   text: string;
   isUser: boolean;
   timestamp: Date;
+  recommendedClinics?: ClinicRecommendation[];
 }
 
 interface AIAssistantScreenProps {
@@ -40,7 +49,76 @@ export default function AIAssistantScreen({
     "What is a root canal?",
     "Tips for teeth whitening?",
     "Post-extraction care?",
+    "Find nearest clinic near me",
   ];
+
+  const toRadians = (value: number): number => (value * Math.PI) / 180;
+
+  const calculateDistanceKm = (
+    fromLat: number,
+    fromLng: number,
+    toLat: number,
+    toLng: number,
+  ): number => {
+    const earthRadiusKm = 6371;
+    const dLat = toRadians(toLat - fromLat);
+    const dLng = toRadians(toLng - fromLng);
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(toRadians(fromLat)) *
+        Math.cos(toRadians(toLat)) *
+        Math.sin(dLng / 2) *
+        Math.sin(dLng / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadiusKm * c;
+  };
+
+  const getNearestClinicRecommendations = async (): Promise<
+    ClinicRecommendation[]
+  > => {
+    const clinicsWithCoordinates = getAllClinics().filter(
+      (clinic) =>
+        Number.isFinite(clinic.location?.lat) &&
+        Number.isFinite(clinic.location?.lng),
+    );
+
+    if (!clinicsWithCoordinates.length) {
+      return [];
+    }
+
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        return [];
+      }
+
+      const current = await Location.getCurrentPositionAsync({});
+      const currentLat = current.coords.latitude;
+      const currentLng = current.coords.longitude;
+
+      return clinicsWithCoordinates
+        .map((clinic) => ({
+          clinic,
+          distanceKm: calculateDistanceKm(
+            currentLat,
+            currentLng,
+            clinic.location.lat,
+            clinic.location.lng,
+          ),
+        }))
+        .sort((a, b) => a.distanceKm - b.distanceKm)
+        .slice(0, 3);
+    } catch (error) {
+      return [];
+    }
+  };
+
+  const handleClinicRecommendationPress = (clinic: Clinic) => {
+    navigation.navigate("Home", {
+      screen: "ClinicDetails",
+      params: { clinic },
+    });
+  };
 
   const handleSend = (text?: string) => {
     const messageText = text || inputText.trim();
@@ -59,36 +137,74 @@ export default function AIAssistantScreen({
 
     // Simulate AI response
     setTimeout(() => {
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        text: getAIResponse(messageText),
-        isUser: false,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
+      void (async () => {
+        const aiResponse = await getAIResponse(messageText);
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          text: aiResponse.text,
+          isUser: false,
+          timestamp: new Date(),
+          recommendedClinics: aiResponse.recommendedClinics,
+        };
+        setMessages((prev) => [...prev, aiMessage]);
+      })();
     }, 1000);
   };
 
-  const getAIResponse = (question: string): string => {
+  const getAIResponse = async (
+    question: string,
+  ): Promise<{ text: string; recommendedClinics?: ClinicRecommendation[] }> => {
     const lowerQuestion = question.toLowerCase();
 
     if (lowerQuestion.includes("care") || lowerQuestion.includes("teeth")) {
-      return "Here are some important tips for dental care:\n\n1. Brush twice daily with fluoride toothpaste\n2. Floss daily to remove plaque between teeth\n3. Visit your dentist every 6 months\n4. Limit sugary foods and drinks\n5. Use mouthwash for extra protection\n\nWould you like more specific information?";
+      return {
+        text: "Here are some important tips for dental care:\n\n1. Brush twice daily with fluoride toothpaste\n2. Floss daily to remove plaque between teeth\n3. Visit your dentist every 6 months\n4. Limit sugary foods and drinks\n5. Use mouthwash for extra protection\n\nWould you like more specific information?",
+      };
     }
 
     if (lowerQuestion.includes("root canal")) {
-      return "A root canal is a treatment to repair and save a badly damaged or infected tooth. The procedure involves:\n\n• Removing the infected pulp\n• Cleaning the root canal\n• Filling and sealing the tooth\n\nIt's typically done under local anesthesia and most patients report minimal discomfort. Would you like to book a consultation?";
+      return {
+        text: "A root canal is a treatment to repair and save a badly damaged or infected tooth. The procedure involves:\n\n• Removing the infected pulp\n• Cleaning the root canal\n• Filling and sealing the tooth\n\nIt's typically done under local anesthesia and most patients report minimal discomfort. Would you like to book a consultation?",
+      };
     }
 
     if (lowerQuestion.includes("whitening")) {
-      return "Teeth whitening tips:\n\n1. Professional whitening is most effective\n2. Avoid staining foods (coffee, red wine)\n3. Use whitening toothpaste regularly\n4. Consider at-home whitening kits\n5. Maintain good oral hygiene\n\nI can help you find clinics that offer professional whitening services!";
+      return {
+        text: "Teeth whitening tips:\n\n1. Professional whitening is most effective\n2. Avoid staining foods (coffee, red wine)\n3. Use whitening toothpaste regularly\n4. Consider at-home whitening kits\n5. Maintain good oral hygiene\n\nI can help you find clinics that offer professional whitening services!",
+      };
     }
 
     if (lowerQuestion.includes("extraction")) {
-      return "Post-extraction care guide:\n\n1. Bite on gauze for 30-45 minutes\n2. Avoid rinsing for 24 hours\n3. Apply ice pack to reduce swelling\n4. Take prescribed pain medication\n5. Eat soft foods for a few days\n6. Avoid smoking and straws\n\nContact your dentist if bleeding persists or you have severe pain.";
+      return {
+        text: "Post-extraction care guide:\n\n1. Bite on gauze for 30-45 minutes\n2. Avoid rinsing for 24 hours\n3. Apply ice pack to reduce swelling\n4. Take prescribed pain medication\n5. Eat soft foods for a few days\n6. Avoid smoking and straws\n\nContact your dentist if bleeding persists or you have severe pain.",
+      };
     }
 
-    return "Thank you for your question! While I can provide general information, I recommend consulting with a dental professional for personalized advice. Would you like me to help you find a clinic or book an appointment?";
+    if (
+      lowerQuestion.includes("nearest") ||
+      lowerQuestion.includes("near me") ||
+      lowerQuestion.includes("nearby") ||
+      lowerQuestion.includes("find clinic") ||
+      lowerQuestion.includes("clinic")
+    ) {
+      const recommendations = await getNearestClinicRecommendations();
+
+      if (!recommendations.length) {
+        return {
+          text: "I can recommend the nearest clinic, but I need your location permission first. Please allow location access, then ask me again to find the nearest clinics.",
+        };
+      }
+
+      const topClinic = recommendations[0];
+      return {
+        text: `I found the nearest clinics based on your current location. The closest one is ${topClinic.clinic.name} (${topClinic.distanceKm.toFixed(1)} km away).\n\nTap any clinic card below to open full clinic details.`,
+        recommendedClinics: recommendations,
+      };
+    }
+
+    return {
+      text: "Thank you for your question! While I can provide general information, I recommend consulting with a dental professional for personalized advice. Would you like me to help you find a clinic or book an appointment?",
+    };
   };
 
   return (
@@ -143,6 +259,35 @@ export default function AIAssistantScreen({
               >
                 {message.text}
               </Text>
+              {!message.isUser &&
+                message.recommendedClinics?.map((recommendation) => (
+                  <TouchableOpacity
+                    key={recommendation.clinic.id}
+                    style={styles.recommendationCard}
+                    onPress={() =>
+                      handleClinicRecommendationPress(recommendation.clinic)
+                    }
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.recommendationHeader}>
+                      <Ionicons name="business" size={16} color="#00BFA6" />
+                      <Text style={styles.recommendationName}>
+                        {recommendation.clinic.name}
+                      </Text>
+                    </View>
+                    <Text style={styles.recommendationAddress}>
+                      {recommendation.clinic.address || "No address provided"}
+                    </Text>
+                    <View style={styles.recommendationFooter}>
+                      <Text style={styles.recommendationDistance}>
+                        {recommendation.distanceKm.toFixed(1)} km away
+                      </Text>
+                      <Text style={styles.recommendationLink}>
+                        View details
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
               <Text
                 style={[
                   styles.timestamp,
@@ -308,6 +453,46 @@ const styles = StyleSheet.create({
   },
   userTimestamp: {
     color: "rgba(255,255,255,0.8)",
+  },
+  recommendationCard: {
+    marginTop: 10,
+    backgroundColor: "#F8FBFF",
+    borderWidth: 1,
+    borderColor: "#DDEAF9",
+    borderRadius: 10,
+    padding: 10,
+  },
+  recommendationHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  recommendationName: {
+    flex: 1,
+    marginLeft: 6,
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1F2937",
+  },
+  recommendationAddress: {
+    fontSize: 12,
+    color: "#4B5563",
+    marginBottom: 6,
+  },
+  recommendationFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  recommendationDistance: {
+    fontSize: 12,
+    color: "#0F766E",
+    fontWeight: "600",
+  },
+  recommendationLink: {
+    fontSize: 12,
+    color: "#00BFA6",
+    fontWeight: "700",
   },
   quickQuestionsContainer: {
     marginTop: 10,

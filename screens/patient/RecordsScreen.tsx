@@ -11,7 +11,10 @@ import {
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { DentalRecord } from "../../data/mockData";
-import { getRecordsByPatient } from "../../services/dataService";
+import {
+    deleteDentalRecord,
+    getRecordsByPatient,
+} from "../../services/dataService";
 
 interface RecordsScreenProps {
   navigation: any;
@@ -21,6 +24,9 @@ export default function RecordsScreen({ navigation }: RecordsScreenProps) {
   const { user } = useAuth();
   const [records, setRecords] = React.useState<DentalRecord[]>([]);
   const [isLoadingRecords, setIsLoadingRecords] = React.useState(true);
+  const [deletingRecordId, setDeletingRecordId] = React.useState<string | null>(
+    null,
+  );
 
   React.useEffect(() => {
     let isMounted = true;
@@ -68,6 +74,43 @@ export default function RecordsScreen({ navigation }: RecordsScreenProps) {
 
   const handleDownload = (record: DentalRecord) => {
     Alert.alert("Download", `Download record from ${record.clinicName}?`);
+  };
+
+  const handleDeleteRecord = (record: DentalRecord) => {
+    Alert.alert(
+      "Delete Record",
+      `Delete this record from ${record.clinicName}? This cannot be undone.`,
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setDeletingRecordId(record.id);
+            try {
+              const success = await deleteDentalRecord(record.id);
+              if (success) {
+                setRecords((prev) =>
+                  prev.filter((item) => item.id !== record.id),
+                );
+              } else {
+                Alert.alert(
+                  "Delete Failed",
+                  "Unable to delete this record right now.",
+                );
+              }
+            } catch (error) {
+              Alert.alert(
+                "Delete Failed",
+                "Unable to delete this record right now.",
+              );
+            } finally {
+              setDeletingRecordId(null);
+            }
+          },
+        },
+      ],
+    );
   };
 
   // Calculate health summary
@@ -135,12 +178,31 @@ export default function RecordsScreen({ navigation }: RecordsScreenProps) {
                   <Ionicons name="medical" size={20} color="#00BFA6" />
                   <Text style={styles.recordTypeText}>{record.type}</Text>
                 </View>
-                <TouchableOpacity
-                  onPress={() => handleDownload(record)}
-                  style={styles.downloadButton}
-                >
-                  <Ionicons name="download-outline" size={20} color="#00BFA6" />
-                </TouchableOpacity>
+                <View style={styles.recordHeaderActions}>
+                  <TouchableOpacity
+                    onPress={() => handleDownload(record)}
+                    style={styles.iconActionButton}
+                  >
+                    <Ionicons
+                      name="download-outline"
+                      size={20}
+                      color="#00BFA6"
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => handleDeleteRecord(record)}
+                    style={[styles.iconActionButton, styles.deleteActionButton]}
+                    disabled={deletingRecordId === record.id}
+                  >
+                    <Ionicons
+                      name="trash-outline"
+                      size={20}
+                      color={
+                        deletingRecordId === record.id ? "#FCA5A5" : "#DC2626"
+                      }
+                    />
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <Text style={styles.clinicName}>{record.clinicName}</Text>
@@ -293,8 +355,17 @@ const styles = StyleSheet.create({
     color: "#00BFA6",
     marginLeft: 5,
   },
-  downloadButton: {
+  recordHeaderActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  iconActionButton: {
     padding: 4,
+    borderRadius: 8,
+  },
+  deleteActionButton: {
+    backgroundColor: "#FEF2F2",
   },
   clinicName: {
     fontSize: 16,

@@ -2,27 +2,27 @@ import { Ionicons } from "@expo/vector-icons";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
-  Image,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Image,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import type {
-  Appointment,
-  PaymentMethod,
-  StaffMember,
+    Appointment,
+    PaymentMethod,
+    StaffMember,
 } from "../../data/mockData";
 import {
-  assignDentistToAppointment,
-  getAppointmentsByClinic,
-  getStaffByClinic,
-  updateAppointmentStatus,
+    assignDentistToAppointment,
+    getAppointmentsByClinic,
+    getStaffByClinic,
+    updateAppointmentStatus,
 } from "../../services/dataService";
 import { db } from "../../services/firebase";
 
@@ -41,6 +41,9 @@ export default function ClinicAppointmentsScreen({
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [dentists, setDentists] = useState<StaffMember[]>([]);
   const [assignModalVisible, setAssignModalVisible] = useState(false);
+  const [detailsModalVisible, setDetailsModalVisible] = useState(false);
+  const [detailsAppointment, setDetailsAppointment] =
+    useState<Appointment | null>(null);
   const [appointmentToAssign, setAppointmentToAssign] =
     useState<Appointment | null>(null);
   const [customDentistName, setCustomDentistName] = useState("");
@@ -131,6 +134,11 @@ export default function ClinicAppointmentsScreen({
     setCustomDentistName("");
   };
 
+  const closeDetailsModal = () => {
+    setDetailsModalVisible(false);
+    setDetailsAppointment(null);
+  };
+
   const handleDentistSelection = (dentist: StaffMember) => {
     if (!appointmentToAssign) {
       return;
@@ -200,24 +208,8 @@ export default function ClinicAppointmentsScreen({
   };
 
   const handleViewDetails = (appointment: Appointment) => {
-    const actions: Array<{
-      text: string;
-      onPress?: () => void;
-      style?: "cancel";
-    }> = [{ text: "Close", style: "cancel" }];
-
-    if (canModifyDentist(appointment.status)) {
-      actions.push({
-        text: "Assign Dentist",
-        onPress: () => openAssignModal(appointment),
-      });
-    }
-
-    Alert.alert(
-      appointment.patientName,
-      `${appointment.type}\n${appointment.date} · ${appointment.time}\n${formatDentistName(appointment.dentistName)}`,
-      actions,
-    );
+    setDetailsAppointment(appointment);
+    setDetailsModalVisible(true);
   };
 
   const formatDentistName = (name?: string) => {
@@ -739,6 +731,135 @@ export default function ClinicAppointmentsScreen({
           </View>
         </View>
       </Modal>
+
+      <Modal
+        visible={detailsModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeDetailsModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.detailsModalCard}>
+            <View style={styles.detailsHeaderRow}>
+              <View style={styles.detailsTitleWrap}>
+                <Text style={styles.detailsPatientName} numberOfLines={1}>
+                  {detailsAppointment?.patientName}
+                </Text>
+                <Text style={styles.detailsSubtitle}>Appointment Details</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.detailsCloseIconButton}
+                onPress={closeDetailsModal}
+                accessibilityLabel="Close appointment details"
+              >
+                <Ionicons name="close" size={18} color="#4B5563" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsLabel}>Service</Text>
+              <Text style={styles.detailsValue}>
+                {detailsAppointment?.type}
+              </Text>
+            </View>
+
+            <View style={styles.detailsTwoColumnRow}>
+              <View style={styles.detailsChip}>
+                <Ionicons name="calendar-outline" size={15} color="#0F766E" />
+                <Text style={styles.detailsChipText}>
+                  {detailsAppointment?.date}
+                </Text>
+              </View>
+              <View style={styles.detailsChip}>
+                <Ionicons name="time-outline" size={15} color="#0F766E" />
+                <Text style={styles.detailsChipText}>
+                  {detailsAppointment?.time}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsLabel}>Dentist</Text>
+              <Text style={styles.detailsValue}>
+                {formatDentistName(detailsAppointment?.dentistName)}
+              </Text>
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsLabel}>Payment</Text>
+              <Text style={styles.detailsValue}>
+                {(
+                  detailsAppointment?.paymentStatus || "no payment"
+                ).toUpperCase()}{" "}
+                • {formatPaymentMethod(detailsAppointment?.paymentMethod)}
+              </Text>
+              {detailsAppointment?.transactionId ? (
+                <Text style={styles.detailsMetaText}>
+                  Ref: {detailsAppointment.transactionId}
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={styles.detailsSection}>
+              <Text style={styles.detailsLabel}>Status</Text>
+              <View
+                style={[
+                  styles.detailsStatusBadge,
+                  {
+                    backgroundColor: `${getStatusColor(detailsAppointment?.status || "pending")}20`,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="ellipse"
+                  size={8}
+                  color={getStatusColor(
+                    detailsAppointment?.status || "pending",
+                  )}
+                />
+                <Text
+                  style={[
+                    styles.detailsStatusText,
+                    {
+                      color: getStatusColor(
+                        detailsAppointment?.status || "pending",
+                      ),
+                    },
+                  ]}
+                >
+                  {(detailsAppointment?.status || "pending")
+                    .charAt(0)
+                    .toUpperCase() +
+                    (detailsAppointment?.status || "pending").slice(1)}
+                </Text>
+              </View>
+            </View>
+
+            {detailsAppointment &&
+            canModifyDentist(detailsAppointment.status) ? (
+              <TouchableOpacity
+                style={styles.detailsPrimaryAction}
+                onPress={() => {
+                  closeDetailsModal();
+                  openAssignModal(detailsAppointment);
+                }}
+              >
+                <Ionicons name="person-add-outline" size={16} color="#FFF" />
+                <Text style={styles.detailsPrimaryActionText}>
+                  Assign Dentist
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.detailsSecondaryAction}
+              onPress={closeDetailsModal}
+            >
+              <Text style={styles.detailsSecondaryActionText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1150,6 +1271,133 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     color: "#333",
+  },
+  detailsModalCard: {
+    width: "100%",
+    backgroundColor: "#FFF",
+    borderRadius: 20,
+    padding: 18,
+    maxHeight: "82%",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  detailsHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 10,
+    gap: 10,
+  },
+  detailsTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  detailsPatientName: {
+    fontSize: 34,
+    fontWeight: "800",
+    color: "#111827",
+  },
+  detailsSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#6B7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  detailsCloseIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  detailsSection: {
+    marginTop: 10,
+  },
+  detailsLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#6B7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  detailsValue: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111827",
+  },
+  detailsMetaText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  detailsTwoColumnRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 10,
+  },
+  detailsChip: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 10,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  detailsChipText: {
+    fontSize: 13,
+    color: "#0F766E",
+    fontWeight: "600",
+  },
+  detailsStatusBadge: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  detailsStatusText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  detailsPrimaryAction: {
+    marginTop: 18,
+    backgroundColor: "#00BFA6",
+    borderRadius: 12,
+    paddingVertical: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  detailsPrimaryActionText: {
+    color: "#FFF",
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  detailsSecondaryAction: {
+    marginTop: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    paddingVertical: 11,
+    alignItems: "center",
+  },
+  detailsSecondaryActionText: {
+    color: "#374151",
+    fontWeight: "600",
+    fontSize: 14,
   },
   noDentistState: {
     alignItems: "center",

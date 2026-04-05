@@ -1,22 +1,22 @@
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { DentalRecord } from "../../data/mockData";
 import {
-  createDentalRecord,
-  getAppointmentsByClinic,
-  getRecordsByClinic,
+    createDentalRecord,
+    getAppointmentsByClinic,
+    getRecordsByClinic,
 } from "../../services/dataService";
 
 interface PatientSummary {
@@ -465,54 +465,72 @@ export default function ClinicPatientsScreen({
                 onPress={() => handleViewRecords(summary)}
               >
                 <View style={styles.patientAvatar}>
-                  <Ionicons name="person" size={24} color="#00BFA6" />
-                </View>
-                <View style={styles.patientInfo}>
-                  <Text style={styles.patientName}>{summary.patientName}</Text>
-                  <Text style={styles.patientIdText}>
-                    ID: {summary.patientId}
+                  <Text style={styles.patientAvatarText}>
+                    {getInitials(summary.patientName)}
                   </Text>
-                  <View style={styles.patientMeta}>
-                    <Ionicons name="medical" size={14} color="#666" />
-                    <Text style={styles.metaText}>
-                      Service: {nextAppointment?.type || "N/A"}
-                    </Text>
-                  </View>
-                  <View style={styles.patientMeta}>
-                    <Ionicons name="document-text" size={14} color="#666" />
-                    <Text style={styles.metaText}>
-                      {summary.recordsCount} record
-                      {summary.recordsCount > 1 ? "s" : ""}
-                    </Text>
-                  </View>
-                  <View style={styles.patientMeta}>
-                    <Ionicons name="calendar" size={14} color="#666" />
-                    <Text style={styles.metaText}>
-                      Appointment: {nextAppointment?.date || "N/A"} at{" "}
-                      {nextAppointment?.time || "N/A"}
-                    </Text>
-                  </View>
                 </View>
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={styles.iconButton}
-                    onPress={() =>
-                      Alert.alert("Call", `Call patient ${summary.patientName}`)
-                    }
-                  >
-                    <Ionicons name="call" size={20} color="#00BFA6" />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.iconButton}
-                    onPress={() =>
-                      Alert.alert(
-                        "Message",
-                        `Message patient ${summary.patientName}`,
-                      )
-                    }
-                  >
-                    <Ionicons name="mail" size={20} color="#00BFA6" />
-                  </TouchableOpacity>
+
+                <View style={styles.patientInfo}>
+                  <View style={styles.patientHeaderRow}>
+                    <View style={styles.patientIdentityBlock}>
+                      <Text style={styles.patientName} numberOfLines={1}>
+                        {summary.patientName}
+                      </Text>
+                      <Text
+                        style={styles.patientIdText}
+                        numberOfLines={1}
+                        ellipsizeMode="middle"
+                      >
+                        ID: {summary.patientId}
+                      </Text>
+                    </View>
+                    <View style={styles.recordsBadge}>
+                      <Ionicons
+                        name="document-text-outline"
+                        size={12}
+                        color="#0F766E"
+                      />
+                      <Text style={styles.recordsBadgeText}>
+                        {summary.recordsCount} record
+                        {summary.recordsCount > 1 ? "s" : ""}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.patientMetaPanel}>
+                    <View style={styles.patientMeta}>
+                      <Ionicons
+                        name="medical-outline"
+                        size={14}
+                        color="#64748B"
+                      />
+                      <Text style={styles.metaText}>
+                        Service: {nextAppointment?.type || "N/A"}
+                      </Text>
+                    </View>
+                    <View style={styles.patientMeta}>
+                      <Ionicons
+                        name="calendar-outline"
+                        size={14}
+                        color="#64748B"
+                      />
+                      <Text style={styles.metaText}>
+                        Next: {nextAppointment?.date || "N/A"} at{" "}
+                        {nextAppointment?.time || "N/A"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.patientFooterRow}>
+                    <View style={styles.viewHintPill}>
+                      <Text style={styles.viewHintText}>View Records</Text>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={14}
+                        color="#0F766E"
+                      />
+                    </View>
+                  </View>
                 </View>
               </TouchableOpacity>
             );
@@ -644,11 +662,15 @@ export default function ClinicPatientsScreen({
                       {getInitials(activePatient.patientName)}
                     </Text>
                   </View>
-                  <View>
-                    <Text style={styles.recordsPatientName}>
+                  <View style={styles.recordsPatientIdentity}>
+                    <Text style={styles.recordsPatientName} numberOfLines={1}>
                       {activePatient.patientName}
                     </Text>
-                    <Text style={styles.recordsPatientId}>
+                    <Text
+                      style={styles.recordsPatientId}
+                      numberOfLines={1}
+                      ellipsizeMode="middle"
+                    >
                       Patient ID • {activePatient.patientId}
                     </Text>
                   </View>
@@ -943,61 +965,114 @@ const styles = StyleSheet.create({
   },
   patientCard: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: "#FFF",
     padding: 16,
-    borderRadius: 12,
+    borderRadius: 20,
     marginBottom: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    shadowColor: "#0F172A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
   },
   patientAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: "#E0F7F4",
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#D1FAE5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 15,
+    marginRight: 14,
+    marginTop: 4,
+  },
+  patientAvatarText: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#047857",
   },
   patientInfo: {
     flex: 1,
+    gap: 10,
+  },
+  patientHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  patientIdentityBlock: {
+    flex: 1,
   },
   patientName: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "#333",
-    marginBottom: 2,
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#1F2937",
   },
   patientIdText: {
+    marginTop: 2,
     fontSize: 12,
-    color: "#888",
-    marginBottom: 4,
+    color: "#6B7280",
+    maxWidth: 230,
+  },
+  recordsBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  recordsBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#0F766E",
+  },
+  patientMetaPanel: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
   },
   patientMeta: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 4,
   },
   metaText: {
+    flex: 1,
     fontSize: 13,
-    color: "#666",
-    marginLeft: 5,
+    color: "#4B5563",
+    marginLeft: 6,
   },
-  actionButtons: {
+  patientFooterRow: {
     flexDirection: "row",
-    gap: 8,
-  },
-  iconButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#E0F7F4",
-    justifyContent: "center",
+    justifyContent: "flex-end",
     alignItems: "center",
+  },
+  viewHintPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  viewHintText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#0F766E",
   },
   emptyState: {
     alignItems: "center",
@@ -1128,12 +1203,20 @@ const styles = StyleSheet.create({
   recordsHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-start",
     marginBottom: 16,
+    gap: 10,
   },
   recordsPatientInfo: {
     flexDirection: "row",
     alignItems: "center",
+    flex: 1,
+    marginRight: 6,
+    minWidth: 0,
+  },
+  recordsPatientIdentity: {
+    flex: 1,
+    minWidth: 0,
   },
   recordsAvatar: {
     width: 48,
@@ -1160,6 +1243,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   recordsCloseButton: {
+    flexShrink: 0,
     width: 36,
     height: 36,
     borderRadius: 18,
