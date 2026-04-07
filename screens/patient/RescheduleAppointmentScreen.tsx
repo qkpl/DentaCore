@@ -4,7 +4,7 @@
  */
 
 import { Ionicons } from "@expo/vector-icons";
-import React, { useState } from "react";
+import { useMemo, useState } from "react";
 import {
     Alert,
     Modal,
@@ -15,7 +15,10 @@ import {
     View,
 } from "react-native";
 import { Appointment } from "../../data/mockData";
-import { updateAppointment } from "../../services/dataService";
+import {
+    getBlockingAppointmentForDentist,
+    updateAppointment,
+} from "../../services/dataService";
 
 interface RescheduleAppointmentScreenProps {
   visible: boolean;
@@ -51,6 +54,27 @@ export default function RescheduleAppointmentScreen({
     "4:00 PM",
   ];
 
+  const unavailableTimes = useMemo(() => {
+    if (!appointment?.dentistName || !selectedDate) {
+      return new Set<string>();
+    }
+
+    const blocked = new Set<string>();
+    availableTimes.forEach((time) => {
+      const conflict = getBlockingAppointmentForDentist(
+        appointment.dentistName,
+        selectedDate,
+        time,
+        appointment.id,
+      );
+      if (conflict) {
+        blocked.add(time);
+      }
+    });
+
+    return blocked;
+  }, [appointment?.dentistName, appointment?.id, selectedDate]);
+
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -82,6 +106,20 @@ export default function RescheduleAppointmentScreen({
     }
 
     if (!appointment) return;
+
+    const conflict = getBlockingAppointmentForDentist(
+      appointment.dentistName,
+      selectedDate,
+      selectedTime,
+      appointment.id,
+    );
+    if (conflict) {
+      Alert.alert(
+        "Doctor Not Available",
+        `${appointment.dentistName} already has another patient on ${conflict.date} at ${conflict.time}. Please choose another slot.`,
+      );
+      return;
+    }
 
     const success = updateAppointment(appointment.id, {
       date: selectedDate,
@@ -207,27 +245,37 @@ export default function RescheduleAppointmentScreen({
             <View style={styles.timeGrid}>
               {availableTimes.map((time) => {
                 const isSelected = selectedTime === time;
+                const isUnavailable = unavailableTimes.has(time);
                 return (
                   <TouchableOpacity
                     key={time}
                     style={[
                       styles.timeSlot,
                       isSelected && styles.timeSlotSelected,
+                      isUnavailable && styles.timeSlotUnavailable,
                     ]}
                     onPress={() => setSelectedTime(time)}
+                    disabled={isUnavailable}
                   >
                     <Ionicons
                       name="time-outline"
                       size={20}
-                      color={isSelected ? "#FFF" : "#00BFA6"}
+                      color={
+                        isUnavailable
+                          ? "#9CA3AF"
+                          : isSelected
+                            ? "#FFF"
+                            : "#00BFA6"
+                      }
                     />
                     <Text
                       style={[
                         styles.timeText,
                         isSelected && styles.timeTextSelected,
+                        isUnavailable && styles.timeTextUnavailable,
                       ]}
                     >
-                      {time}
+                      {isUnavailable ? `${time} (Not available)` : time}
                     </Text>
                   </TouchableOpacity>
                 );
@@ -368,6 +416,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#00BFA6",
     borderColor: "#00BFA6",
   },
+  timeSlotUnavailable: {
+    backgroundColor: "#F3F4F6",
+    borderColor: "#E5E7EB",
+  },
   timeText: {
     fontSize: 14,
     fontWeight: "600",
@@ -375,6 +427,9 @@ const styles = StyleSheet.create({
   },
   timeTextSelected: {
     color: "#FFF",
+  },
+  timeTextUnavailable: {
+    color: "#9CA3AF",
   },
   footer: {
     padding: 20,

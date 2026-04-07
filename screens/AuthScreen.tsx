@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
-import React, { useState } from "react";
+import { useState } from "react";
 import {
     Alert,
     KeyboardAvoidingView,
@@ -27,6 +27,20 @@ export default function AuthScreen() {
     "patient",
   );
   const { login, signup } = useAuth();
+
+  const isStructuredAddressFormat = (value: string): boolean => {
+    const segments = value
+      .split(",")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (segments.length < 4) {
+      return false;
+    }
+
+    const postalCode = segments[segments.length - 1];
+    return /^\d{4}$/.test(postalCode);
+  };
 
   const handleAuth = async () => {
     const cleanedEmail = email.trim();
@@ -69,6 +83,17 @@ export default function AuthScreen() {
 
         if (userType === "clinic" && !cleanedClinicAddress) {
           Alert.alert("Error", "Clinic address is required");
+          return;
+        }
+
+        if (
+          userType === "clinic" &&
+          !isStructuredAddressFormat(cleanedClinicAddress)
+        ) {
+          Alert.alert(
+            "Invalid clinic address",
+            "Use this format: House No./Street, Barangay, City/Municipality, Province (if applicable), 4-digit Postal Code.",
+          );
           return;
         }
 
@@ -117,21 +142,6 @@ export default function AuthScreen() {
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const showCredentials = () => {
-    const credentials = {
-      patient: "Email: user@email.com\nPassword: user123",
-      clinic: "Email: admin@smilecare.com\nPassword: clinic123",
-      admin: "Email: admin@dentacore.com\nPassword: admin123",
-    };
-
-    Alert.alert(
-      "Demo Credentials",
-      `${userType.toUpperCase()} Account:\n\n${credentials[userType]}\n\n` +
-        "You can also switch user type and view other credentials.",
-      [{ text: "OK" }],
-    );
   };
 
   return (
@@ -296,13 +306,19 @@ export default function AuthScreen() {
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Clinic Address</Text>
               <TextInput
-                style={styles.input}
-                placeholder="Enter clinic address"
+                style={[styles.input, styles.addressInput]}
+                placeholder="24 C.V. UP Campus, UP Campus, Quezon City, Metro Manila, 1101"
                 placeholderTextColor="#999"
                 value={clinicAddress}
                 onChangeText={setClinicAddress}
                 autoCapitalize="words"
+                multiline
+                numberOfLines={3}
               />
+              <Text style={styles.addressHint}>
+                Format: House No./Street, Barangay, City/Municipality,
+                Province (if applicable), 4-digit Postal Code
+              </Text>
             </View>
           )}
 
@@ -336,13 +352,6 @@ export default function AuthScreen() {
                 : isSignUp
                   ? "Sign Up"
                   : "Sign In"}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={showCredentials}>
-            <Text style={styles.demoText}>
-              View {userType.charAt(0).toUpperCase() + userType.slice(1)} Demo
-              Credentials
             </Text>
           </TouchableOpacity>
 
@@ -492,6 +501,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E0E0E0",
   },
+  addressInput: {
+    minHeight: 84,
+    textAlignVertical: "top",
+  },
+  addressHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 16,
+  },
   roleInfo: {
     backgroundColor: "#E3F2FD",
     padding: 12,
@@ -517,13 +536,6 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 16,
     fontWeight: "bold",
-  },
-  demoText: {
-    color: "#00BFA6",
-    fontSize: 14,
-    textAlign: "center",
-    fontWeight: "600",
-    marginBottom: 20,
   },
   divider: {
     flexDirection: "row",

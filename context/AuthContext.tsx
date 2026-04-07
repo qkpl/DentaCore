@@ -37,6 +37,24 @@ interface AuthResponse {
   message: string;
 }
 
+const STANDARD_CLINIC_SERVICE_CATALOG: Record<string, number> = {
+  "Dental Checkup": 1800,
+  "Teeth Cleaning": 2500,
+  "Dental Filling": 3200,
+  Extraction: 3500,
+  "Root Canal": 7200,
+  Orthodontics: 9500,
+  "Teeth Whitening": 4200,
+  "Dental X-Ray": 1500,
+  "Oral Prophylaxis": 2200,
+  "Wisdom Tooth Extraction": 5500,
+  "Dental Crown": 8500,
+  Dentures: 14000,
+  Veneer: 9000,
+};
+
+const STANDARD_CLINIC_SERVICES = Object.keys(STANDARD_CLINIC_SERVICE_CATALOG);
+
 const SHOULD_SEED_ADMIN_AUTH =
   process.env.EXPO_PUBLIC_ENABLE_ADMIN_AUTH_SEED === "true";
 
@@ -216,7 +234,8 @@ const localSignup = async (
       phone: "",
       email,
       description: "New dental clinic",
-      servicesOffered: ["General Dentistry"],
+      servicesOffered: [...STANDARD_CLINIC_SERVICES],
+      servicePrices: { ...STANDARD_CLINIC_SERVICE_CATALOG },
       operatingHours: {
         monday: "9:00 AM - 5:00 PM",
         tuesday: "9:00 AM - 5:00 PM",
@@ -286,13 +305,17 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
   const syncClinicsFromFirestore = async (): Promise<void> => {
     try {
       const clinicsSnapshot = await getDocs(collection(db, "clinics"));
-      clinicsSnapshot.forEach((clinicDoc) => {
+      const fetchedClinics = clinicsSnapshot.docs.map((clinicDoc) => {
         const clinicData = clinicDoc.data() as Clinic;
-        upsertMockClinic({
+        return {
           ...clinicData,
           id: clinicData.id || clinicDoc.id,
-        });
+        };
       });
+
+      // Only keep registered clinics from Firestore in runtime cache.
+      mockClinics.splice(0, mockClinics.length, ...fetchedClinics);
+      syncAdminRelationships();
     } catch (error) {
       // Ignore sync failures and keep using currently available local data.
     }
@@ -538,7 +561,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({
           phone: "",
           email: email.trim().toLowerCase(),
           description: "New dental clinic",
-          servicesOffered: ["General Dentistry"],
+          servicesOffered: [...STANDARD_CLINIC_SERVICES],
+          servicePrices: { ...STANDARD_CLINIC_SERVICE_CATALOG },
           operatingHours: {
             monday: "9:00 AM - 5:00 PM",
             tuesday: "9:00 AM - 5:00 PM",

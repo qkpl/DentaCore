@@ -12,7 +12,12 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import {
+    MapView,
+    Marker,
+    PROVIDER_GOOGLE,
+    type Region,
+} from "../../components/maps/MapPrimitives";
 import { Clinic } from "../../data/mockData";
 import {
     getClinicById,
@@ -95,6 +100,28 @@ export default function ClinicDetailsScreen({
     ],
     [clinic?.address, clinic?.email, clinic?.phone],
   );
+
+  const mapSubtitle = useMemo(() => {
+    const address = (clinic?.address || "").trim();
+    if (!address) {
+      return "No address provided";
+    }
+
+    const segments = address
+      .split(",")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (segments.length >= 3) {
+      return `${segments[1]}, ${segments[2]}`;
+    }
+
+    if (segments.length >= 2) {
+      return `${segments[0]}, ${segments[1]}`;
+    }
+
+    return address;
+  }, [clinic?.address]);
 
   const hasCoords = useMemo(
     () =>
@@ -210,32 +237,9 @@ export default function ClinicDetailsScreen({
               <Text style={styles.mapSyncText}>Syncing latest pin…</Text>
             </View>
           )}
-          <TouchableOpacity
-            style={[
-              styles.mapActionButton,
-              !hasCoords && styles.mapActionButtonDisabled,
-            ]}
-            onPress={handleOpenMap}
-            activeOpacity={0.85}
-            disabled={!hasCoords}
-          >
-            <Ionicons
-              name="navigate"
-              size={16}
-              color={hasCoords ? "#0F172A" : "#9CA3AF"}
-            />
-            <Text
-              style={[
-                styles.mapActionText,
-                !hasCoords && styles.mapActionTextDisabled,
-              ]}
-            >
-              Open in Maps
-            </Text>
-          </TouchableOpacity>
           <MapView
             style={StyleSheet.absoluteFill}
-            provider={PROVIDER_GOOGLE}
+            provider={PROVIDER_GOOGLE as any}
             region={mapRegion}
             scrollEnabled={false}
             zoomEnabled={false}
@@ -268,15 +272,37 @@ export default function ClinicDetailsScreen({
           <View style={styles.mapBadge}>
             <Text style={styles.mapBadgeTitle}>{clinic.name}</Text>
             <Text style={styles.mapBadgeSubtitle} numberOfLines={1}>
-              {clinic.address}
+              {mapSubtitle}
             </Text>
           </View>
         </View>
         <Text style={styles.mapHint}>
           {hasCoords
-            ? "Tap Open in Maps to launch turn-by-turn directions."
+            ? "Pinned by clinic team · Used for patient map search"
             : "This clinic hasn’t pinned their map location yet."}
         </Text>
+        <TouchableOpacity
+          style={[
+            styles.directionsButton,
+            !hasCoords && styles.directionsButtonDisabled,
+          ]}
+          onPress={handleOpenMap}
+          disabled={!hasCoords}
+        >
+          <Ionicons
+            name="navigate"
+            size={16}
+            color={hasCoords ? "#0F766E" : "#9CA3AF"}
+          />
+          <Text
+            style={[
+              styles.directionsButtonText,
+              !hasCoords && styles.directionsButtonTextDisabled,
+            ]}
+          >
+            Open in Maps
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {/* Contact Information */}
@@ -520,44 +546,15 @@ const styles = StyleSheet.create({
     color: "#036666",
     fontWeight: "600",
   },
-  mapActionButton: {
-    position: "absolute",
-    bottom: 12,
-    right: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.96)",
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 3,
-    zIndex: 2,
-  },
-  mapActionButtonDisabled: {
-    backgroundColor: "rgba(243,244,246,0.92)",
-  },
-  mapActionText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#0F172A",
-  },
-  mapActionTextDisabled: {
-    color: "#9CA3AF",
-  },
   mapBadge: {
     position: "absolute",
-    top: 12,
-    left: 12,
-    right: 12,
+    top: 10,
+    left: 10,
+    right: 10,
     backgroundColor: "#FFF",
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     shadowColor: "#000",
     shadowOpacity: 0.1,
     shadowRadius: 6,
@@ -594,6 +591,28 @@ const styles = StyleSheet.create({
     marginTop: 8,
     color: "#6B7280",
     fontSize: 12,
+  },
+  directionsButton: {
+    marginTop: 10,
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "#ECFEF8",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+  },
+  directionsButtonDisabled: {
+    backgroundColor: "#F3F4F6",
+  },
+  directionsButtonText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#0F766E",
+  },
+  directionsButtonTextDisabled: {
+    color: "#9CA3AF",
   },
   servicesContainer: {
     flexDirection: "row",

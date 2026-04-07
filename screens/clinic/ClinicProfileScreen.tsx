@@ -3,21 +3,26 @@ import Constants from "expo-constants";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    Alert,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import {
+    MapView,
+    Marker,
+    PROVIDER_GOOGLE,
+} from "../../components/maps/MapPrimitives";
 import { useAuth } from "../../context/AuthContext";
 import {
-  refreshClinicsFromFirestore,
-  updateClinic,
+    getUpcomingAppointmentsForClinic,
+    refreshClinicsFromFirestore,
+    updateClinic,
 } from "../../services/dataService";
 
 interface ClinicProfileScreenProps {
@@ -40,6 +45,28 @@ type PlacesAutocompleteDetails = {
   };
 };
 
+const isStructuredAddressFormat = (value: string): boolean => {
+  const segments = value
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length < 4) {
+    return false;
+  }
+
+  const postalCode = segments[segments.length - 1];
+  return /^\d{4}$/.test(postalCode);
+};
+
+const normalizeAddressForGeocoding = (value: string): string => {
+  if (/philippines/i.test(value)) {
+    return value;
+  }
+
+  return `${value}, Philippines`;
+};
+
 export default function ClinicProfileScreen({
   navigation,
 }: ClinicProfileScreenProps) {
@@ -47,6 +74,8 @@ export default function ClinicProfileScreen({
   const [isEditing, setIsEditing] = useState(false);
   const [showServicesModal, setShowServicesModal] = useState(false);
   const [showHoursModal, setShowHoursModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [showPrivacySettingsModal, setShowPrivacySettingsModal] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Form fields
@@ -56,8 +85,10 @@ export default function ClinicProfileScreen({
   const [email, setEmail] = useState("");
   const [description, setDescription] = useState("");
   const [services, setServices] = useState<string[]>([]);
+  const [servicePrices, setServicePrices] = useState<Record<string, number>>({});
   const [operatingHours, setOperatingHours] = useState<any>({});
   const [newService, setNewService] = useState("");
+  const [newServicePrice, setNewServicePrice] = useState("");
   const [locationCoords, setLocationCoords] = useState({
     lat: 14.5995,
     lng: 120.9842,
@@ -65,9 +96,42 @@ export default function ClinicProfileScreen({
   const [geocodeStatus, setGeocodeStatus] = useState<GeocodeStatus>("idle");
   const [geocodeMessage, setGeocodeMessage] = useState("");
   const [lastPinnedAddress, setLastPinnedAddress] = useState("");
+  const [allowUserNameAccess, setAllowUserNameAccess] = useState(true);
+  const [allowUserContactAccess, setAllowUserContactAccess] = useState(true);
+  const [allowUserLocationAccess, setAllowUserLocationAccess] = useState(false);
+  const [enableThirdPartySharing, setEnableThirdPartySharing] = useState(false);
+  const [dataRetentionDays, setDataRetentionDays] = useState("365");
+  const [systemNotificationsEnabled, setSystemNotificationsEnabled] = useState(true);
+  const [notificationFrequency, setNotificationFrequency] = useState("Real-time");
+  const [defaultTimezone, setDefaultTimezone] = useState("Asia/Manila");
+  const [defaultClinicView, setDefaultClinicView] = useState("List");
+  const [appLanguage, setAppLanguage] = useState("English");
   const deviceGeocodePermission = useRef<"unknown" | "granted" | "denied">(
     "unknown",
   );
+
+  const clinicNotifications = useMemo(() => {
+    if (!clinic?.id) {
+      return [];
+    }
+
+    return getUpcomingAppointmentsForClinic(clinic.id, 12).map((appointment) => {
+      const dayDiff =
+        (new Date(`${appointment.date}T00:00:00`).getTime() -
+          new Date().setHours(0, 0, 0, 0)) /
+        (1000 * 60 * 60 * 24);
+
+      const priority = dayDiff <= 1 ? "high" : dayDiff <= 3 ? "medium" : "low";
+      return {
+        id: appointment.id,
+        title: `Upcoming patient: ${appointment.patientName}`,
+        message: `${appointment.type} on ${appointment.date} at ${appointment.time}`,
+        timestamp: `${appointment.date} ${appointment.time}`,
+        status: "unread",
+        priority,
+      };
+    });
+  }, [clinic?.id]);
 
   const googleMapsApiKey = useMemo(() => {
     const envKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -114,7 +178,7 @@ export default function ClinicProfileScreen({
 
       try {
         const response = await fetch(
-          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(targetAddress)}&key=${googleMapsApiKey}`,
+          `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(normalizeAddressForGeocoding(targetAddress))}&key=${googleMapsApiKey}`,
         );
         const json = await response.json();
         if (
@@ -148,7 +212,9 @@ export default function ClinicProfileScreen({
       }
 
       try {
-        const results = await Location.geocodeAsync(targetAddress);
+        const results = await Location.geocodeAsync(
+          normalizeAddressForGeocoding(targetAddress),
+        );
         const first = results?.[0];
         if (
           first &&
@@ -248,6 +314,7 @@ export default function ClinicProfileScreen({
       setEmail(clinic.email);
       setDescription(clinic.description);
       setServices([...clinic.servicesOffered]);
+      setServicePrices(clinic.servicePrices ?? {});
       setOperatingHours({ ...clinic.operatingHours });
       setLocationCoords({
         lat: clinic.location?.lat ?? 14.5995,
@@ -283,8 +350,29 @@ export default function ClinicProfileScreen({
       return;
     }
 
+    if (!isStructuredAddressFormat(trimmedAddress)) {
+      Alert.alert(
+        "Invalid clinic address",
+        "Use this format: House No./Street, Barangay, City/Municipality, Province (if applicable), 4-digit Postal Code.",
+      );
+      return;
+    }
+
     const ensuredServices =
       services.length > 0 ? services : ["General Dentistry"];
+
+    const normalizedServicePrices: Record<string, number> = {};
+    for (const serviceName of ensuredServices) {
+      const price = servicePrices[serviceName];
+      if (!Number.isFinite(price) || price <= 0) {
+        Alert.alert(
+          "Missing service price",
+          `Please provide a valid price for ${serviceName}.`,
+        );
+        return;
+      }
+      normalizedServicePrices[serviceName] = Math.round(price);
+    }
 
     setIsSaving(true);
     try {
@@ -315,6 +403,7 @@ export default function ClinicProfileScreen({
         email: trimmedEmail,
         description: description,
         servicesOffered: ensuredServices,
+        servicePrices: normalizedServicePrices,
         operatingHours: operatingHours,
         location: {
           lat: Number(locationCoords.lat),
@@ -329,6 +418,7 @@ export default function ClinicProfileScreen({
         setPhone(trimmedPhone);
         setEmail(trimmedEmail);
         setServices(ensuredServices);
+        setServicePrices(normalizedServicePrices);
         await refreshClinicsFromFirestore();
         Alert.alert("Success", "Profile updated successfully");
         setIsEditing(false);
@@ -348,6 +438,7 @@ export default function ClinicProfileScreen({
     setEmail(clinic.email);
     setDescription(clinic.description);
     setServices([...clinic.servicesOffered]);
+    setServicePrices(clinic.servicePrices ?? {});
     setOperatingHours({ ...clinic.operatingHours });
     setLocationCoords({
       lat: clinic.location?.lat ?? 14.5995,
@@ -360,14 +451,44 @@ export default function ClinicProfileScreen({
   };
 
   const handleAddService = () => {
-    if (newService.trim()) {
-      setServices([...services, newService.trim()]);
-      setNewService("");
+    const serviceName = newService.trim();
+    const priceValue = Number(newServicePrice.trim());
+
+    if (!serviceName) {
+      Alert.alert("Missing service", "Please enter a service name.");
+      return;
     }
+
+    if (!Number.isFinite(priceValue) || priceValue <= 0) {
+      Alert.alert("Invalid price", "Please provide a valid service price.");
+      return;
+    }
+
+    if (!services.includes(serviceName)) {
+      setServices([...services, serviceName]);
+    }
+
+    setServicePrices((prev) => ({ ...prev, [serviceName]: Math.round(priceValue) }));
+    setNewService("");
+    setNewServicePrice("");
   };
 
   const handleRemoveService = (index: number) => {
+    const serviceName = services[index];
     setServices(services.filter((_, i) => i !== index));
+    setServicePrices((prev) => {
+      const next = { ...prev };
+      delete next[serviceName];
+      return next;
+    });
+  };
+
+  const handleServicePriceChange = (serviceName: string, value: string) => {
+    const numeric = Number(value.replace(/[^0-9]/g, ""));
+    setServicePrices((prev) => ({
+      ...prev,
+      [serviceName]: Number.isFinite(numeric) && numeric > 0 ? numeric : 0,
+    }));
   };
 
   const handleUpdateHours = (day: string, hours: string) => {
@@ -446,6 +567,14 @@ export default function ClinicProfileScreen({
 
     if (!trimmedAddress) {
       Alert.alert("Missing address", "Please enter an address first.");
+      return;
+    }
+
+    if (!isStructuredAddressFormat(trimmedAddress)) {
+      Alert.alert(
+        "Invalid address format",
+        "Use: House No./Street, Barangay, City/Municipality, Province (if applicable), 4-digit Postal Code.",
+      );
       return;
     }
 
@@ -582,12 +711,18 @@ export default function ClinicProfileScreen({
                     style={styles.input}
                     value={address}
                     onChangeText={handleAddressChange}
-                    placeholder="Enter address"
+                    placeholder="24 C.V. UP Campus, UP Campus, Quezon City, Metro Manila, 1101"
                     multiline
                   />
                 )
               ) : (
                 <Text style={styles.infoValue}>{address}</Text>
+              )}
+              {isEditing && (
+                <Text style={styles.addressFormatHint}>
+                  Format: House No./Street, Barangay, City/Municipality,
+                  Province (if applicable), 4-digit Postal Code
+                </Text>
               )}
             </View>
           </View>
@@ -641,7 +776,7 @@ export default function ClinicProfileScreen({
         <View style={styles.mapCard}>
           <MapView
             style={styles.mapView}
-            provider={PROVIDER_GOOGLE}
+            provider={PROVIDER_GOOGLE as any}
             initialRegion={{
               latitude: locationCoords.lat,
               longitude: locationCoords.lng,
@@ -807,9 +942,7 @@ export default function ClinicProfileScreen({
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() =>
-            Alert.alert("Notifications", "Configure notification preferences")
-          }
+          onPress={() => setShowNotificationsModal(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="notifications-outline" size={24} color="#666" />
@@ -833,7 +966,7 @@ export default function ClinicProfileScreen({
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() => Alert.alert("Privacy", "Privacy settings coming soon")}
+          onPress={() => setShowPrivacySettingsModal(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="shield-checkmark-outline" size={24} color="#666" />
@@ -911,6 +1044,16 @@ export default function ClinicProfileScreen({
                   placeholder="Enter service name"
                   placeholderTextColor="#999"
                 />
+                <TextInput
+                  style={styles.servicePriceInput}
+                  value={newServicePrice}
+                  onChangeText={(value) =>
+                    setNewServicePrice(value.replace(/[^0-9]/g, ""))
+                  }
+                  placeholder="Price"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                />
                 <TouchableOpacity
                   style={styles.addBtn}
                   onPress={handleAddService}
@@ -924,7 +1067,19 @@ export default function ClinicProfileScreen({
               <Text style={styles.modalSectionTitle}>Current Services</Text>
               {services.map((service, index) => (
                 <View key={index} style={styles.serviceItem}>
-                  <Text style={styles.serviceItemText}>{service}</Text>
+                  <View style={styles.serviceItemCopy}>
+                    <Text style={styles.serviceItemText}>{service}</Text>
+                    <Text style={styles.servicePriceText}>
+                      ₱{(servicePrices[service] ?? 0).toLocaleString()}
+                    </Text>
+                  </View>
+                  <TextInput
+                    style={styles.inlinePriceInput}
+                    value={String(servicePrices[service] ?? "")}
+                    onChangeText={(value) => handleServicePriceChange(service, value)}
+                    keyboardType="number-pad"
+                    placeholder="Price"
+                  />
                   <TouchableOpacity onPress={() => handleRemoveService(index)}>
                     <Ionicons name="trash-outline" size={20} color="#F44336" />
                   </TouchableOpacity>
@@ -985,6 +1140,110 @@ export default function ClinicProfileScreen({
               <Text style={styles.doneButtonText}>Done</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showNotificationsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowNotificationsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowNotificationsModal(false)}>
+              <Ionicons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Clinic Notifications</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            {clinicNotifications.length === 0 ? (
+              <View style={styles.notificationCard}>
+                <Text style={styles.notificationTitle}>No notifications yet</Text>
+                <Text style={styles.notificationMeta}>Upcoming patient alerts will appear here.</Text>
+              </View>
+            ) : (
+              clinicNotifications.map((item) => (
+                <View key={item.id} style={styles.notificationCard}>
+                  <Text style={styles.notificationTitle}>{item.title}</Text>
+                  <Text style={styles.notificationBody}>{item.message}</Text>
+                  <Text style={styles.notificationMeta}>
+                    {item.timestamp} · {item.status} · {item.priority}
+                  </Text>
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showPrivacySettingsModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowPrivacySettingsModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => setShowPrivacySettingsModal(false)}>
+              <Ionicons name="close" size={28} color="#333" />
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>Privacy & System Settings</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <ScrollView style={styles.modalContent}>
+            <View style={styles.settingsBlock}>
+              <Text style={styles.modalSectionTitle}>Privacy Settings</Text>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Admin can view user names</Text>
+                <TouchableOpacity onPress={() => setAllowUserNameAccess((v) => !v)}>
+                  <Text style={styles.toggleValue}>{allowUserNameAccess ? "On" : "Off"}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Admin can view user contact</Text>
+                <TouchableOpacity onPress={() => setAllowUserContactAccess((v) => !v)}>
+                  <Text style={styles.toggleValue}>{allowUserContactAccess ? "On" : "Off"}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Admin can view user location</Text>
+                <TouchableOpacity onPress={() => setAllowUserLocationAccess((v) => !v)}>
+                  <Text style={styles.toggleValue}>{allowUserLocationAccess ? "On" : "Off"}</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>Third-party data sharing</Text>
+                <TouchableOpacity onPress={() => setEnableThirdPartySharing((v) => !v)}>
+                  <Text style={styles.toggleValue}>{enableThirdPartySharing ? "Enabled" : "Disabled"}</Text>
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.input}
+                value={dataRetentionDays}
+                onChangeText={(value) => setDataRetentionDays(value.replace(/[^0-9]/g, ""))}
+                keyboardType="number-pad"
+                placeholder="Data retention days"
+              />
+            </View>
+
+            <View style={styles.settingsBlock}>
+              <Text style={styles.modalSectionTitle}>System Settings</Text>
+              <TextInput style={styles.input} value={appLanguage} onChangeText={setAppLanguage} placeholder="Language" />
+              <TextInput style={styles.input} value={notificationFrequency} onChangeText={setNotificationFrequency} placeholder="Notification frequency" />
+              <TextInput style={styles.input} value={defaultClinicView} onChangeText={setDefaultClinicView} placeholder="Default clinic view" />
+              <TextInput style={styles.input} value={defaultTimezone} onChangeText={setDefaultTimezone} placeholder="Default timezone" />
+              <View style={styles.toggleRow}>
+                <Text style={styles.toggleLabel}>System notifications</Text>
+                <TouchableOpacity onPress={() => setSystemNotificationsEnabled((v) => !v)}>
+                  <Text style={styles.toggleValue}>{systemNotificationsEnabled ? "Enabled" : "Disabled"}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
         </View>
       </Modal>
     </ScrollView>
@@ -1268,6 +1527,12 @@ const styles = StyleSheet.create({
     color: "#111827",
     fontSize: 14,
   },
+  addressFormatHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 16,
+  },
   textArea: {
     fontSize: 14,
     color: "#333",
@@ -1455,9 +1720,42 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F0",
   },
+  serviceItemCopy: {
+    flex: 1,
+    marginRight: 8,
+  },
   serviceItemText: {
     fontSize: 15,
     color: "#333",
+  },
+  servicePriceText: {
+    fontSize: 12,
+    color: "#0F766E",
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  servicePriceInput: {
+    backgroundColor: "#F9F9F9",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    minWidth: 90,
+    marginRight: 8,
+    color: "#333",
+  },
+  inlinePriceInput: {
+    backgroundColor: "#F9F9F9",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#E0E0E0",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 88,
+    marginRight: 8,
+    color: "#111",
+    textAlign: "right",
   },
   hoursEditRow: {
     backgroundColor: "#FFF",
@@ -1498,5 +1796,51 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 16,
     fontWeight: "bold",
+  },
+  notificationCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+  },
+  notificationTitle: {
+    color: "#111827",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  notificationBody: {
+    color: "#374151",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  notificationMeta: {
+    color: "#6B7280",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  settingsBlock: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F1F5F9",
+  },
+  toggleLabel: {
+    color: "#334155",
+    fontSize: 13,
+    flex: 1,
+    marginRight: 8,
+  },
+  toggleValue: {
+    color: "#0F766E",
+    fontSize: 13,
+    fontWeight: "700",
   },
 });

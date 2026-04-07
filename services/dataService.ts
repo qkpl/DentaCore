@@ -1,32 +1,35 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-    addDoc,
-    collection,
-    deleteDoc,
-    doc,
-    DocumentData,
-    getDocs,
-    query,
-    QueryDocumentSnapshot,
-    setDoc,
-    updateDoc,
-    where,
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  DocumentData,
+  getDocs,
+  query,
+  QueryDocumentSnapshot,
+  setDoc,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import {
-    Appointment,
-    Clinic,
-    ClinicReview,
-    DentalRecord,
-    mockAppointments,
-    mockClinicReviews,
-    mockClinics,
-    mockDentalRecords,
-    mockStaffMembers,
-    mockUsers,
-    PaymentMethod,
-    PaymentStatus,
-    StaffMember,
-    User,
+  Appointment,
+  AuditLog,
+  AuditScope,
+  Clinic,
+  ClinicReview,
+  DentalRecord,
+  mockAppointments,
+  mockAuditLogs,
+  mockClinicReviews,
+  mockClinics,
+  mockDentalRecords,
+  mockStaffMembers,
+  mockUsers,
+  PaymentMethod,
+  PaymentStatus,
+  StaffMember,
+  User,
 } from "../data/mockData";
 import { db } from "./firebase";
 
@@ -42,6 +45,7 @@ const patientRecordsCollection = collection(db, "patientRecords");
 const clinicsCollection = collection(db, "clinics");
 const usersCollection = collection(db, "users");
 const clinicReviewsCollection = collection(db, "clinicReviews");
+const auditLogsCollection = collection(db, "auditLogs");
 const LOCAL_RECORDS_KEY = "dentacore/localDentalRecords";
 let localRecordsCache: DentalRecord[] | null = null;
 
@@ -167,6 +171,64 @@ const appointmentPriceLookup: Record<string, number> = {
   "restorative dentistry": 5400,
   "pediatric dentistry": 3000,
   "emergency care": 4000,
+  "dental x-ray": 1500,
+  "oral prophylaxis": 2200,
+  "tooth filling": 3200,
+  "wisdom tooth extraction": 5500,
+  "dental crown": 8500,
+  dentures: 14000,
+  veneer: 9000,
+  "tooth bonding": 4500,
+  "tmj treatment": 6800,
+};
+
+const STANDARD_CLINIC_SERVICE_CATALOG: Record<string, number> = {
+  "Dental Checkup": 1800,
+  "Teeth Cleaning": 2500,
+  "Dental Filling": 3200,
+  Extraction: 3500,
+  "Root Canal": 7200,
+  Orthodontics: 9500,
+  "Teeth Whitening": 4200,
+  "Dental X-Ray": 1500,
+  "Oral Prophylaxis": 2200,
+  "Wisdom Tooth Extraction": 5500,
+  "Dental Crown": 8500,
+  Dentures: 14000,
+  Veneer: 9000,
+};
+
+const buildMergedClinicServicePrices = (
+  existing?: Record<string, number>,
+): Record<string, number> => {
+  const merged: Record<string, number> = {
+    ...STANDARD_CLINIC_SERVICE_CATALOG,
+  };
+
+  if (!existing || typeof existing !== "object") {
+    return merged;
+  }
+
+  Object.entries(existing).forEach(([service, price]) => {
+    if (typeof service === "string" && typeof price === "number" && Number.isFinite(price) && price > 0) {
+      merged[service] = Math.round(price);
+    }
+  });
+
+  return merged;
+};
+
+const enrichClinicServices = (clinic: Clinic): Clinic => {
+  const mergedPrices = buildMergedClinicServicePrices(clinic.servicePrices);
+  const mergedServices = Array.from(
+    new Set([...(clinic.servicesOffered || []), ...Object.keys(mergedPrices)]),
+  );
+
+  return {
+    ...clinic,
+    servicesOffered: mergedServices,
+    servicePrices: mergedPrices,
+  };
 };
 
 const normalizeServiceKey = (value: string): string =>
@@ -207,7 +269,10 @@ const defaultOperatingHours = {
 };
 
 const estimateAppointmentValue = (appointment: Appointment): number => {
-  const base = getServicePrice(appointment.type);
+  const base =
+    typeof appointment.amount === "number" && Number.isFinite(appointment.amount)
+      ? appointment.amount
+      : getServicePrice(appointment.type);
 
   switch (appointment.status) {
     case "completed":
@@ -285,6 +350,12 @@ const mapFirestoreAppointment = (
   snapshot: QueryDocumentSnapshot<DocumentData>,
 ): Appointment => {
   const data = snapshot.data() as Partial<Appointment>;
+  const amount =
+    typeof data.amount === "number" && Number.isFinite(data.amount)
+      ? data.amount
+      : undefined;
+  const currency = safeString(data.currency) || undefined;
+
   return {
     id: snapshot.id,
     patientId: safeString(data.patientId),
@@ -299,6 +370,8 @@ const mapFirestoreAppointment = (
     paymentMethod: parsePaymentMethod(data.paymentMethod),
     paymentStatus: parsePaymentStatus(data.paymentStatus),
     transactionId: safeString(data.transactionId),
+    amount,
+    currency,
   };
 };
 
@@ -314,7 +387,26 @@ const mapFirestoreClinic = (
 ): Clinic => {
   const data = snapshot.data() as Partial<Clinic>;
   const operatingHours = data.operatingHours || {};
-  return {
+  const rawServicePrices = (data as any)?.servicePrices;
+  const servicePrices =
+    rawServicePrices && typeof rawServicePrices === "object"
+      ? Object.entries(rawServicePrices).reduce<Record<string, number>>(
+          (acc, [key, value]) => {
+            if (
+              typeof key === "string" &&
+              typeof value === "number" &&
+              Number.isFinite(value) &&
+              value > 0
+            ) {
+              acc[key] = value;
+            }
+            return acc;
+          },
+          {},
+        )
+      : undefined;
+
+  const clinic: Clinic = {
     id: data.id || snapshot.id,
     name: safeString(data.name) || "Unnamed Clinic",
     address: safeString(data.address) || "No address provided",
@@ -324,6 +416,7 @@ const mapFirestoreClinic = (
     servicesOffered: Array.isArray(data.servicesOffered)
       ? (data.servicesOffered as string[])
       : [],
+    servicePrices,
     operatingHours: {
       monday:
         safeString((operatingHours as any)?.monday) ||
@@ -358,6 +451,8 @@ const mapFirestoreClinic = (
     isActive: Boolean(data.isActive),
     lastLoginDate: data.lastLoginDate,
   };
+
+  return enrichClinicServices(clinic);
 };
 
 const normalizeUserRole = (role: unknown): User["role"] => {
@@ -479,6 +574,81 @@ const persistAppointmentToFirestore = async (appointment: Appointment) => {
   await setDoc(appointmentDoc, appointment);
 };
 
+type AuditEventType = AuditLog["eventType"];
+
+type AuditEventInput = {
+  scope: AuditScope;
+  eventType: AuditEventType;
+  actorRole?: AuditLog["actorRole"];
+  actorId?: string;
+  actorName?: string;
+  clinicId?: string;
+  patientId?: string;
+  appointmentId?: string;
+  transactionId?: string;
+  paymentMethod?: Appointment["paymentMethod"];
+  amount?: number;
+  status?: AuditLog["status"];
+  details: string;
+};
+
+const createAuditEvent = (input: AuditEventInput): AuditLog => ({
+  id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  createdAt: new Date().toISOString(),
+  actorRole: input.actorRole ?? "system",
+  actorId: input.actorId,
+  actorName: input.actorName,
+  scope: input.scope,
+  eventType: input.eventType,
+  clinicId: input.clinicId,
+  patientId: input.patientId,
+  appointmentId: input.appointmentId,
+  transactionId: input.transactionId,
+  paymentMethod: input.paymentMethod,
+  amount: input.amount,
+  status: input.status,
+  details: input.details,
+});
+
+const omitUndefinedFields = <T extends Record<string, unknown>>(
+  payload: T,
+): Partial<T> => {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+};
+
+const logAuditEvent = (input: AuditEventInput): AuditLog => {
+  const event = createAuditEvent(input);
+  mockAuditLogs.unshift(event);
+  const firestorePayload = omitUndefinedFields(
+    event as unknown as Record<string, unknown>,
+  );
+  void addDoc(auditLogsCollection, firestorePayload).catch((error) => {
+    console.warn("Failed to persist audit event to Firestore", error);
+  });
+  return event;
+};
+
+export const getClinicTransactionAuditLogs = (
+  clinicId: string,
+  limit = 30,
+): AuditLog[] => {
+  return mockAuditLogs
+    .filter(
+      (log) =>
+        log.scope === "clinic" &&
+        log.clinicId === clinicId &&
+        (log.eventType === "payment_received" ||
+          log.eventType === "payment_failed"),
+    )
+    .slice(0, limit);
+};
+
+export const getAdminAuditLogs = (limit = 50): AuditLog[] => {
+  return mockAuditLogs.filter((log) => log.scope === "admin").slice(0, limit);
+};
+
 export const syncAppointmentsFromFirestore = async (): Promise<void> => {
   try {
     const snapshot = await getDocs(appointmentsCollection);
@@ -498,11 +668,42 @@ syncAdminRelationships();
 export const refreshClinicsFromFirestore = async (): Promise<Clinic[]> => {
   try {
     const snapshot = await getDocs(clinicsCollection);
-    if (!snapshot.empty) {
-      const fetchedClinics = snapshot.docs.map(mapFirestoreClinic);
-      replaceClinicsCache(fetchedClinics);
-      syncAdminRelationships();
-    }
+    const fetchedClinics = snapshot.docs.map(mapFirestoreClinic);
+
+    snapshot.docs.forEach((clinicDoc) => {
+      const clinic = fetchedClinics.find((item) => item.id === clinicDoc.id);
+      if (!clinic) {
+        return;
+      }
+
+      const source = clinicDoc.data() as Partial<Clinic>;
+      const sourceServices = Array.isArray(source.servicesOffered)
+        ? source.servicesOffered
+        : [];
+      const sourcePrices =
+        source.servicePrices && typeof source.servicePrices === "object"
+          ? Object.keys(source.servicePrices)
+          : [];
+
+      const needsBackfill =
+        sourceServices.length < clinic.servicesOffered.length ||
+        sourcePrices.length < Object.keys(clinic.servicePrices || {}).length;
+
+      if (!needsBackfill) {
+        return;
+      }
+
+      void updateDoc(doc(db, "clinics", clinic.id), {
+        servicesOffered: clinic.servicesOffered,
+        servicePrices: clinic.servicePrices,
+      }).catch((error) => {
+        console.warn("Failed to backfill clinic services", error);
+      });
+    });
+
+    // Keep clinic cache aligned to registered Firestore clinics only.
+    replaceClinicsCache(fetchedClinics);
+    syncAdminRelationships();
   } catch (error) {
     console.warn("Failed to sync clinics from Firestore", error);
   }
@@ -711,6 +912,13 @@ export const updateClinic = async (
 
   try {
     await updateDoc(doc(db, "clinics", clinicId), updates);
+    logAuditEvent({
+      scope: "admin",
+      eventType: "clinic_updated",
+      actorRole: "admin",
+      clinicId,
+      details: `Clinic profile updated (${clinicId}).`,
+    });
     return true;
   } catch (error) {
     console.warn("Failed to update clinic in Firestore", error);
@@ -731,6 +939,13 @@ export const deleteClinic = (clinicId: string): boolean => {
 
     appointmentIndexes.forEach((idx) => mockAppointments.splice(idx, 1));
     syncAdminRelationships();
+    logAuditEvent({
+      scope: "admin",
+      eventType: "clinic_deleted",
+      actorRole: "admin",
+      clinicId,
+      details: `Clinic removed (${clinicId}) with linked appointments cleanup.`,
+    });
     return true;
   }
   return false;
@@ -752,9 +967,159 @@ export const getAppointmentById = (
   return mockAppointments.find((apt) => apt.id === appointmentId);
 };
 
+const parseTimeLabelToMinutes = (timeLabel?: string): number => {
+  if (!timeLabel) {
+    return 0;
+  }
+
+  const match = timeLabel.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$/i);
+  if (!match) {
+    return 0;
+  }
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2] ?? "0");
+  const period = (match[3] ?? "AM").toUpperCase();
+
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return 0;
+  }
+
+  if (period === "AM") {
+    if (hour === 12) {
+      hour = 0;
+    }
+  } else if (hour !== 12) {
+    hour += 12;
+  }
+
+  return hour * 60 + minute;
+};
+
+const toAppointmentTimestamp = (appointment: Appointment): number => {
+  const date = new Date(`${appointment.date}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const minutes = parseTimeLabelToMinutes(appointment.time);
+  return date.getTime() + minutes * 60 * 1000;
+};
+
+const isUpcomingActiveAppointment = (appointment: Appointment): boolean => {
+  const isActive = appointment.status === "pending" || appointment.status === "confirmed";
+  if (!isActive) {
+    return false;
+  }
+
+  return toAppointmentTimestamp(appointment) >= Date.now();
+};
+
+export const getUpcomingAppointmentsForPatient = (
+  patientId: string,
+  limit = 5,
+): Appointment[] => {
+  return mockAppointments
+    .filter((apt) => apt.patientId === patientId)
+    .filter(isUpcomingActiveAppointment)
+    .sort((a, b) => toAppointmentTimestamp(a) - toAppointmentTimestamp(b))
+    .slice(0, limit);
+};
+
+export const getUpcomingAppointmentsForClinic = (
+  clinicId: string,
+  limit = 5,
+): Appointment[] => {
+  return mockAppointments
+    .filter((apt) => apt.clinicId === clinicId)
+    .filter(isUpcomingActiveAppointment)
+    .sort((a, b) => toAppointmentTimestamp(a) - toAppointmentTimestamp(b))
+    .slice(0, limit);
+};
+
+export const getBlockingAppointmentForPatient = (
+  patientId: string,
+  date?: string,
+  time?: string,
+): Appointment | undefined => {
+  return mockAppointments.find((apt) => {
+    const isActive = apt.status === "pending" || apt.status === "confirmed";
+    if (!isActive || apt.patientId !== patientId) {
+      return false;
+    }
+
+    if (!date || !time) {
+      return true;
+    }
+
+    return apt.date === date && apt.time === time;
+  });
+};
+
+const normalizeProviderName = (value?: string): string => {
+  return (value || "")
+    .replace(/^Dr\.?\s*/i, "")
+    .trim()
+    .toLowerCase();
+};
+
+const hasAssignedProviderName = (value?: string): boolean => {
+  const normalized = normalizeProviderName(value);
+  return (
+    normalized.length > 0 &&
+    normalized !== "assigned dentist" &&
+    normalized !== "dentist not assigned"
+  );
+};
+
+export const getBlockingAppointmentForDentist = (
+  dentistName?: string,
+  date?: string,
+  time?: string,
+  excludeAppointmentId?: string,
+): Appointment | undefined => {
+  if (!hasAssignedProviderName(dentistName) || !date || !time) {
+    return undefined;
+  }
+
+  const targetName = normalizeProviderName(dentistName);
+
+  return mockAppointments.find((apt) => {
+    const isActive = apt.status === "pending" || apt.status === "confirmed";
+    if (!isActive) {
+      return false;
+    }
+
+    if (excludeAppointmentId && apt.id === excludeAppointmentId) {
+      return false;
+    }
+
+    if (apt.date !== date || apt.time !== time) {
+      return false;
+    }
+
+    if (!hasAssignedProviderName(apt.dentistName)) {
+      return false;
+    }
+
+    return normalizeProviderName(apt.dentistName) === targetName;
+  });
+};
+
 export const createAppointment = (
   appointment: Omit<Appointment, "id">,
 ): Appointment => {
+  const existing = getBlockingAppointmentForPatient(
+    appointment.patientId,
+    appointment.date,
+    appointment.time,
+  );
+  if (existing) {
+    throw new Error(
+      `You already have an appointment on ${existing.date} at ${existing.time}. Please choose a different date or time.`,
+    );
+  }
+
   const newAppointment: Appointment = {
     ...appointment,
     id: `apt${Date.now()}`,
@@ -763,6 +1128,54 @@ export const createAppointment = (
   void persistAppointmentToFirestore(newAppointment).catch((error) => {
     console.warn("Failed to persist appointment to Firestore", error);
   });
+
+  logAuditEvent({
+    scope: "admin",
+    eventType: "appointment_created",
+    actorRole: "patient",
+    actorId: newAppointment.patientId,
+    actorName: newAppointment.patientName,
+    clinicId: newAppointment.clinicId,
+    patientId: newAppointment.patientId,
+    appointmentId: newAppointment.id,
+    status: newAppointment.status,
+    details: `Appointment created at ${newAppointment.clinicName} (${newAppointment.date} ${newAppointment.time}).`,
+  });
+
+  if (newAppointment.paymentStatus === "paid" && newAppointment.transactionId) {
+    const paymentDetails = `Payment received via ${(newAppointment.paymentMethod || "unknown").toUpperCase()} for ${newAppointment.clinicName}.`;
+    logAuditEvent({
+      scope: "clinic",
+      eventType: "payment_received",
+      actorRole: "patient",
+      actorId: newAppointment.patientId,
+      actorName: newAppointment.patientName,
+      clinicId: newAppointment.clinicId,
+      patientId: newAppointment.patientId,
+      appointmentId: newAppointment.id,
+      transactionId: newAppointment.transactionId,
+      paymentMethod: newAppointment.paymentMethod,
+      amount: newAppointment.amount,
+      status: "paid",
+      details: paymentDetails,
+    });
+    logAuditEvent({
+      scope: "admin",
+      eventType: "payment_received",
+      actorRole: "patient",
+      actorId: newAppointment.patientId,
+      actorName: newAppointment.patientName,
+      clinicId: newAppointment.clinicId,
+      patientId: newAppointment.patientId,
+      appointmentId: newAppointment.id,
+      transactionId: newAppointment.transactionId,
+      paymentMethod: newAppointment.paymentMethod,
+      amount: newAppointment.amount,
+      status: "paid",
+      details: paymentDetails,
+    });
+  }
+
   return newAppointment;
 };
 
@@ -813,6 +1226,31 @@ export const updateAppointmentStatus = async (
 
   const appointment = mockAppointments[appointmentIndex];
   appointment.status = status;
+
+  logAuditEvent({
+    scope: "clinic",
+    eventType: "appointment_status_updated",
+    actorRole: "clinic",
+    actorId: appointment.clinicId,
+    actorName: appointment.clinicName,
+    clinicId: appointment.clinicId,
+    patientId: appointment.patientId,
+    appointmentId: appointment.id,
+    status,
+    details: `Clinic updated appointment status to ${status}.`,
+  });
+  logAuditEvent({
+    scope: "admin",
+    eventType: "appointment_status_updated",
+    actorRole: "clinic",
+    actorId: appointment.clinicId,
+    actorName: appointment.clinicName,
+    clinicId: appointment.clinicId,
+    patientId: appointment.patientId,
+    appointmentId: appointment.id,
+    status,
+    details: `Appointment at ${appointment.clinicName} moved to ${status}.`,
+  });
 
   void updateDoc(doc(db, "appointments", appointmentId), {
     status,
@@ -879,6 +1317,16 @@ export const assignDentistToAppointment = (
     return false;
   }
 
+  const blocking = getBlockingAppointmentForDentist(
+    dentistName,
+    appointment.date,
+    appointment.time,
+    appointment.id,
+  );
+  if (blocking) {
+    return false;
+  }
+
   appointment.dentistName = dentistName;
   void updateDoc(doc(db, "appointments", appointmentId), {
     dentistName,
@@ -894,7 +1342,59 @@ export const updateAppointment = (
 ): boolean => {
   const index = mockAppointments.findIndex((apt) => apt.id === appointmentId);
   if (index !== -1) {
+    const previous = mockAppointments[index];
+    const nextDate = updates.date ?? previous.date;
+    const nextTime = updates.time ?? previous.time;
+    const dentistName = updates.dentistName ?? previous.dentistName;
+
+    if (
+      hasAssignedProviderName(dentistName) &&
+      (nextDate !== previous.date || nextTime !== previous.time)
+    ) {
+      const blocking = getBlockingAppointmentForDentist(
+        dentistName,
+        nextDate,
+        nextTime,
+        previous.id,
+      );
+      if (blocking) {
+        return false;
+      }
+    }
+
     mockAppointments[index] = { ...mockAppointments[index], ...updates };
+    const next = mockAppointments[index];
+
+    if (
+      (updates.date && updates.date !== previous.date) ||
+      (updates.time && updates.time !== previous.time)
+    ) {
+      logAuditEvent({
+        scope: "clinic",
+        eventType: "appointment_rescheduled",
+        actorRole: "patient",
+        actorId: next.patientId,
+        actorName: next.patientName,
+        clinicId: next.clinicId,
+        patientId: next.patientId,
+        appointmentId: next.id,
+        status: next.status,
+        details: `Patient rescheduled from ${previous.date} ${previous.time} to ${next.date} ${next.time}.`,
+      });
+      logAuditEvent({
+        scope: "admin",
+        eventType: "appointment_rescheduled",
+        actorRole: "patient",
+        actorId: next.patientId,
+        actorName: next.patientName,
+        clinicId: next.clinicId,
+        patientId: next.patientId,
+        appointmentId: next.id,
+        status: next.status,
+        details: `Appointment rescheduled at ${next.clinicName}.`,
+      });
+    }
+
     void updateDoc(doc(db, "appointments", appointmentId), updates).catch(
       (error) => {
         console.warn("Failed to update appointment in Firestore", error);
@@ -934,6 +1434,31 @@ export const cancelAppointment = (
 
   appointment.status = "cancelled";
   appointment.cancellationReason = reason;
+
+  logAuditEvent({
+    scope: "clinic",
+    eventType: "appointment_cancelled",
+    actorRole: "patient",
+    actorId: appointment.patientId,
+    actorName: appointment.patientName,
+    clinicId: appointment.clinicId,
+    patientId: appointment.patientId,
+    appointmentId: appointment.id,
+    status: "cancelled",
+    details: `Appointment cancelled by patient. Reason: ${reason}`,
+  });
+  logAuditEvent({
+    scope: "admin",
+    eventType: "appointment_cancelled",
+    actorRole: "patient",
+    actorId: appointment.patientId,
+    actorName: appointment.patientName,
+    clinicId: appointment.clinicId,
+    patientId: appointment.patientId,
+    appointmentId: appointment.id,
+    status: "cancelled",
+    details: `Patient cancelled appointment at ${appointment.clinicName}.`,
+  });
 
   void updateDoc(doc(db, "appointments", appointmentId), {
     status: "cancelled",
@@ -1090,6 +1615,13 @@ export const updateUser = (
   const index = mockUsers.findIndex((u) => u.id === userId);
   if (index !== -1) {
     mockUsers[index] = { ...mockUsers[index], ...updates };
+    logAuditEvent({
+      scope: "admin",
+      eventType: "user_updated",
+      actorRole: "admin",
+      actorId: userId,
+      details: `User updated (${userId}).`,
+    });
     return true;
   }
   return false;
@@ -1107,6 +1639,13 @@ export const deleteUser = (userId: string): boolean => {
 
     appointmentIndexes.forEach((idx) => mockAppointments.splice(idx, 1));
     syncAdminRelationships();
+    logAuditEvent({
+      scope: "admin",
+      eventType: "user_deleted",
+      actorRole: "admin",
+      actorId: userId,
+      details: `User deleted (${userId}) and linked appointments removed.`,
+    });
     return true;
   }
   return false;
@@ -1137,6 +1676,8 @@ interface RevenueByClinicSummary {
   clinicName: string;
   revenue: number;
   percentage: number;
+  patientCount: number;
+  appointmentCount: number;
 }
 
 interface MonthlyRevenuePoint {
@@ -1150,6 +1691,8 @@ export interface AdminAnalyticsReport {
     patients: number;
     appointments: number;
     revenue: number;
+    collectedRevenue: number;
+    projectedRevenue: number;
     activeClinics: number;
   };
   appointmentStatusSummary: StatusSummary[];
@@ -1163,6 +1706,21 @@ export interface AdminAnalyticsReport {
   cancellationRate: number;
 }
 
+const toActiveRevenueValue = (appointment: Appointment): number => {
+  if (appointment.status === "cancelled") {
+    return 0;
+  }
+
+  if (appointment.paymentStatus === "paid") {
+    if (typeof appointment.amount === "number" && Number.isFinite(appointment.amount)) {
+      return appointment.amount;
+    }
+    return getServicePrice(appointment.type);
+  }
+
+  return estimateAppointmentValue(appointment);
+};
+
 const buildMonthlyRevenueTrend = (
   totalRevenue: number,
 ): MonthlyRevenuePoint[] => {
@@ -1174,8 +1732,7 @@ const buildMonthlyRevenueTrend = (
     }
 
     const monthKey = appointment.date.slice(0, 7);
-    buckets[monthKey] =
-      (buckets[monthKey] ?? 0) + estimateAppointmentValue(appointment);
+    buckets[monthKey] = (buckets[monthKey] ?? 0) + toActiveRevenueValue(appointment);
   });
 
   const sortedKeys = Object.keys(buckets).sort();
@@ -1215,29 +1772,80 @@ export const getAdminAnalyticsReport = (): AdminAnalyticsReport => {
   const { clinics, patients } = getAdminLinkedEntities();
   const appointments = [...mockAppointments];
 
-  const revenueByClinic: RevenueByClinicSummary[] = clinics.map((clinic) => ({
-    clinicId: clinic.id,
-    clinicName: clinic.name,
-    revenue: clinic.revenue,
-    percentage: 0,
+  const clinicSummaryById = new Map<string, RevenueByClinicSummary>();
+  clinics.forEach((clinic) => {
+    clinicSummaryById.set(clinic.id, {
+      clinicId: clinic.id,
+      clinicName: clinic.name,
+      revenue: 0,
+      percentage: 0,
+      patientCount: 0,
+      appointmentCount: 0,
+    });
+  });
+
+  const uniquePatientsByClinic = new Map<string, Set<string>>();
+  appointments.forEach((appointment) => {
+    const summary = clinicSummaryById.get(appointment.clinicId);
+    if (!summary) {
+      return;
+    }
+
+    const revenueValue = toActiveRevenueValue(appointment);
+    summary.revenue += revenueValue;
+
+    if (appointment.status !== "cancelled") {
+      summary.appointmentCount += 1;
+      if (!uniquePatientsByClinic.has(appointment.clinicId)) {
+        uniquePatientsByClinic.set(appointment.clinicId, new Set<string>());
+      }
+      uniquePatientsByClinic.get(appointment.clinicId)!.add(appointment.patientId);
+    }
+  });
+
+  const revenueByClinic: RevenueByClinicSummary[] = Array.from(
+    clinicSummaryById.values(),
+  ).map((entry) => ({
+    ...entry,
+    revenue: Math.round(entry.revenue),
+    patientCount: uniquePatientsByClinic.get(entry.clinicId)?.size ?? 0,
   }));
 
-  const clinicRevenueTotal = revenueByClinic.reduce(
+  const totalRevenue = revenueByClinic.reduce(
     (sum, item) => sum + item.revenue,
     0,
   );
 
-  const appointmentRevenueTotal = appointments.reduce(
-    (sum, appointment) => sum + estimateAppointmentValue(appointment),
-    0,
+  const collectedRevenue = Math.round(
+    appointments.reduce((sum, appointment) => {
+      if (appointment.paymentStatus !== "paid") {
+        return sum;
+      }
+
+      if (typeof appointment.amount === "number" && Number.isFinite(appointment.amount)) {
+        return sum + appointment.amount;
+      }
+
+      return sum + getServicePrice(appointment.type);
+    }, 0),
   );
 
-  const totalRevenue = Math.max(clinicRevenueTotal, appointmentRevenueTotal);
+  const projectedRevenue = totalRevenue;
 
   revenueByClinic.forEach((entry) => {
     entry.percentage = totalRevenue
       ? Number(((entry.revenue / totalRevenue) * 100).toFixed(1))
       : 0;
+  });
+
+  revenueByClinic.sort((a, b) => {
+    if (b.revenue !== a.revenue) {
+      return b.revenue - a.revenue;
+    }
+    if (b.patientCount !== a.patientCount) {
+      return b.patientCount - a.patientCount;
+    }
+    return b.appointmentCount - a.appointmentCount;
   });
 
   const appointmentStatusSummary: StatusSummary[] = appointmentStatuses.map(
@@ -1288,7 +1896,7 @@ export const getAdminAnalyticsReport = (): AdminAnalyticsReport => {
   );
 
   const avgAppointmentValue = appointments.length
-    ? Math.round(appointmentRevenueTotal / appointments.length)
+    ? Math.round(totalRevenue / Math.max(1, appointments.length))
     : 0;
 
   const confirmedCount = appointments.filter(
@@ -1319,7 +1927,9 @@ export const getAdminAnalyticsReport = (): AdminAnalyticsReport => {
       clinics: clinics.length,
       patients: patients.length,
       appointments: appointments.length,
-      revenue: totalRevenue,
+      revenue: projectedRevenue,
+      collectedRevenue,
+      projectedRevenue,
       activeClinics: clinics.filter((clinic) => clinic.isActive).length,
     },
     appointmentStatusSummary,
@@ -1348,6 +1958,14 @@ export const getClinicStats = async (clinicId: string) => {
   const clinic = getClinicById(clinicId);
   const appointments = getAppointmentsByClinic(clinicId);
   const records = await getRecordsByClinic(clinicId);
+  const uniquePatients = new Set(
+    appointments
+      .filter((appointment) => appointment.status !== "cancelled")
+      .map((appointment) => appointment.patientId),
+  );
+  const dynamicRevenue = Math.round(
+    appointments.reduce((sum, appointment) => sum + toActiveRevenueValue(appointment), 0),
+  );
 
   return {
     totalAppointments: appointments.length,
@@ -1357,9 +1975,9 @@ export const getClinicStats = async (clinicId: string) => {
       .length,
     completedAppointments: appointments.filter((a) => a.status === "completed")
       .length,
-    totalPatients: clinic?.totalPatients || 0,
+    totalPatients: uniquePatients.size || clinic?.totalPatients || 0,
     todaysAppointments: clinic?.todaysAppointments || 0,
-    revenue: clinic?.revenue || 0,
+    revenue: dynamicRevenue || clinic?.revenue || 0,
     totalRecords: records.length,
   };
 };

@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { collection, getDocs, query, where } from "firebase/firestore";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     Alert,
     Image,
@@ -21,6 +22,7 @@ import type {
 import {
     assignDentistToAppointment,
     getAppointmentsByClinic,
+    getBlockingAppointmentForDentist,
     getStaffByClinic,
     updateAppointmentStatus,
 } from "../../services/dataService";
@@ -49,6 +51,32 @@ export default function ClinicAppointmentsScreen({
   const [customDentistName, setCustomDentistName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
+  const loadAssignableTeamMembers = useCallback(async () => {
+    if (!clinic) {
+      setDentists([]);
+      return;
+    }
+
+    try {
+      const staffQuery = query(
+        collection(db, "staffMembers"),
+        where("clinicId", "==", clinic.id),
+      );
+      const snapshot = await getDocs(staffQuery);
+      const fetchedStaff: StaffMember[] = snapshot.docs.map((staffDoc) => {
+        const staffData = staffDoc.data() as Omit<StaffMember, "id">;
+        return {
+          id: staffDoc.id,
+          ...staffData,
+        };
+      });
+
+      setDentists(fetchedStaff);
+    } catch (error) {
+      setDentists(getStaffByClinic(clinic.id));
+    }
+  }, [clinic]);
+
   useEffect(() => {
     if (!clinic) {
       setAppointments([]);
@@ -60,62 +88,52 @@ export default function ClinicAppointmentsScreen({
   }, [clinic, refreshTrigger]);
 
   useEffect(() => {
-    let isMounted = true;
+    void loadAssignableTeamMembers();
+  }, [loadAssignableTeamMembers, refreshTrigger]);
 
-    const loadDentists = async () => {
-      if (!clinic) {
-        if (isMounted) {
-          setDentists([]);
-        }
+  useFocusEffect(
+    useCallback(() => {
+      void loadAssignableTeamMembers();
+    }, [loadAssignableTeamMembers]),
+  );
+
+  const availableProviders = useMemo(
+    () => dentists.filter((staff) => staff.status?.toLowerCase() === "active"),
+    [dentists],
+  );
+
+  const providerAvailability = useMemo(() => {
+    const availabilityMap = new Map<string, Appointment | null>();
+
+    availableProviders.forEach((provider) => {
+      if (!appointmentToAssign) {
+        availabilityMap.set(provider.id, null);
         return;
       }
 
-      try {
-        const staffQuery = query(
-          collection(db, "staffMembers"),
-          where("clinicId", "==", clinic.id),
-        );
-        const snapshot = await getDocs(staffQuery);
-        const fetchedStaff: StaffMember[] = snapshot.docs.map((staffDoc) => {
-          const staffData = staffDoc.data() as Omit<StaffMember, "id">;
-          return {
-            id: staffDoc.id,
-            ...staffData,
-          };
-        });
+      const blocking = getBlockingAppointmentForDentist(
+        provider.name,
+        appointmentToAssign.date,
+        appointmentToAssign.time,
+        appointmentToAssign.id,
+      );
 
-        if (isMounted) {
-          setDentists(fetchedStaff);
-        }
-      } catch (error) {
-        if (isMounted) {
-          setDentists(getStaffByClinic(clinic.id));
-        }
-      }
-    };
+      availabilityMap.set(provider.id, blocking ?? null);
+    });
 
-    void loadDentists();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [clinic, refreshTrigger]);
-
-  const availableDentists = useMemo(
-    () =>
-      dentists.filter(
-        (staff) =>
-          staff.role.toLowerCase().includes("dentist") &&
-          staff.status?.toLowerCase() === "active",
-      ),
-    [dentists],
-  );
+    return availabilityMap;
+  }, [
+    appointmentToAssign?.date,
+    appointmentToAssign?.id,
+    appointmentToAssign?.time,
+    availableProviders,
+  ]);
 
   if (!clinic) {
     return null;
   }
 
-  const openAssignModal = (appointment: Appointment) => {
+  const openAssignModal = async (appointment: Appointment) => {
     if (!canModifyDentist(appointment.status)) {
       Alert.alert(
         "Locked",
@@ -124,6 +142,7 @@ export default function ClinicAppointmentsScreen({
       return;
     }
 
+    await loadAssignableTeamMembers();
     setAppointmentToAssign(appointment);
     setAssignModalVisible(true);
   };
@@ -141,6 +160,15 @@ export default function ClinicAppointmentsScreen({
 
   const handleDentistSelection = (dentist: StaffMember) => {
     if (!appointmentToAssign) {
+      return;
+    }
+
+    const blocking = providerAvailability.get(dentist.id);
+    if (blocking) {
+      Alert.alert(
+        "Not Available",
+        `${dentist.name} is already assigned to ${blocking.patientName} on ${blocking.date} at ${blocking.time}.`,
+      );
       return;
     }
 
@@ -187,6 +215,20 @@ export default function ClinicAppointmentsScreen({
     const trimmedName = customDentistName.trim();
     if (!trimmedName) {
       Alert.alert("Missing Name", "Please enter a dentist name first.");
+      return;
+    }
+
+    const blocking = getBlockingAppointmentForDentist(
+      trimmedName,
+      appointmentToAssign.date,
+      appointmentToAssign.time,
+      appointmentToAssign.id,
+    );
+    if (blocking) {
+      Alert.alert(
+        "Not Available",
+        `${trimmedName} is already assigned to ${blocking.patientName} on ${blocking.date} at ${blocking.time}.`,
+      );
       return;
     }
 
@@ -671,15 +713,20 @@ export default function ClinicAppointmentsScreen({
       <Modal visible={assignModalVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Assign Dentist</Text>
-            {availableDentists.length === 0 ? (
+            <Text style={styles.modalTitle}>Reassign Doctor</Text>
+            {appointmentToAssign ? (
+              <Text style={styles.modalScheduleNote}>
+                Checking availability for {appointmentToAssign.date} at {appointmentToAssign.time}
+              </Text>
+            ) : null}
+            {availableProviders.length === 0 ? (
               <View style={styles.noDentistState}>
                 <Ionicons name="warning-outline" size={36} color="#FFB300" />
                 <Text style={styles.noDentistText}>
-                  No active dentists found for this clinic.
+                  No active team members found for this clinic.
                 </Text>
                 <Text style={styles.noDentistSubtext}>
-                  Activate a dentist from Staff Management or assign one
+                  Add or activate staff in Staff Management, or assign one
                   manually below.
                 </Text>
                 <TextInput
@@ -705,20 +752,36 @@ export default function ClinicAppointmentsScreen({
               </View>
             ) : (
               <ScrollView style={styles.dentistList}>
-                {availableDentists.map((dentist) => (
+                {availableProviders.map((dentist) => (
+                  (() => {
+                    const blocking = providerAvailability.get(dentist.id);
+                    const isUnavailable = Boolean(blocking);
+
+                    return (
                   <TouchableOpacity
                     key={dentist.id}
-                    style={styles.dentistCard}
+                    style={[
+                      styles.dentistCard,
+                      isUnavailable && styles.dentistCardUnavailable,
+                    ]}
                     onPress={() => handleDentistSelection(dentist)}
+                    disabled={isUnavailable}
                   >
                     <Text style={styles.dentistName}>{dentist.name}</Text>
                     <Text style={styles.dentistRole}>{dentist.role}</Text>
-                    <Text style={styles.dentistAvailability}>
-                      {dentist.status?.toLowerCase() === "active"
-                        ? "Available"
-                        : "Unavailable"}
+                    <Text
+                      style={[
+                        styles.dentistAvailability,
+                        isUnavailable && styles.dentistAvailabilityUnavailable,
+                      ]}
+                    >
+                      {isUnavailable
+                        ? `Not available (${blocking!.time})`
+                        : "Available"}
                     </Text>
                   </TouchableOpacity>
+                    );
+                  })()
                 ))}
               </ScrollView>
             )}
@@ -1236,6 +1299,11 @@ const styles = StyleSheet.create({
     color: "#333",
     marginBottom: 12,
   },
+  modalScheduleNote: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginBottom: 10,
+  },
   dentistList: {
     maxHeight: 280,
   },
@@ -1243,6 +1311,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: "#F0F0F0",
+  },
+  dentistCardUnavailable: {
+    opacity: 0.5,
   },
   dentistName: {
     fontSize: 16,
@@ -1259,6 +1330,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
     color: "#4CAF50",
+  },
+  dentistAvailabilityUnavailable: {
+    color: "#E53935",
   },
   modalCloseButton: {
     marginTop: 16,

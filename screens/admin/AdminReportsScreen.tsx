@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import {
     getAdminAnalyticsReport,
+    getAdminAuditLogs,
     getAdminLinkedEntities,
 } from "../../services/dataService";
 
@@ -10,6 +11,7 @@ export default function AdminReportsScreen() {
   const { user } = useAuth();
   const analytics = getAdminAnalyticsReport();
   const linkedEntities = getAdminLinkedEntities();
+  const adminAuditLogs = getAdminAuditLogs(10);
 
   const revenueGrowthDisplay = (analytics.revenueGrowthRate * 100).toFixed(1);
   const chartMaxValue = Math.max(
@@ -32,9 +34,18 @@ export default function AdminReportsScreen() {
 
       <View style={styles.metricsGrid}>
         <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>Total Revenue</Text>
+          <Text style={styles.metricLabel}>Collected Revenue</Text>
           <Text style={styles.metricValue}>
-            ₱{analytics.totals.revenue.toLocaleString()}
+            ₱{analytics.totals.collectedRevenue.toLocaleString()}
+          </Text>
+          <Text style={styles.metricSub}>
+            Paid transactions only
+          </Text>
+        </View>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>Projected Revenue</Text>
+          <Text style={styles.metricValue}>
+            ₱{analytics.totals.projectedRevenue.toLocaleString()}
           </Text>
           <Text style={styles.metricSub}>
             Predicted next month ₱
@@ -137,6 +148,29 @@ export default function AdminReportsScreen() {
             </Text>
           </View>
         ))}
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Recent Audit Logs</Text>
+        {adminAuditLogs.length === 0 ? (
+          <View style={styles.emptyAuditCard}>
+            <Text style={styles.emptyAuditText}>No audit events yet.</Text>
+          </View>
+        ) : (
+          adminAuditLogs.map((log) => (
+            <View key={log.id} style={styles.rowCard}>
+              <View style={styles.rowLeft}>
+                <Ionicons name="document-text-outline" size={18} color="#7C4DFF" />
+                <View>
+                  <Text style={styles.rowLabel}>{log.details}</Text>
+                  <Text style={styles.auditMeta}>
+                    {new Date(log.createdAt).toLocaleString()} · {log.eventType}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ))
+        )}
       </View>
 
       <View style={styles.section}>
@@ -355,5 +389,21 @@ const styles = StyleSheet.create({
   entityLabel: {
     fontSize: 12,
     color: "#777",
+  },
+  auditMeta: {
+    fontSize: 11,
+    color: "#888",
+    marginTop: 2,
+  },
+  emptyAuditCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#EEE",
+  },
+  emptyAuditText: {
+    color: "#666",
+    fontSize: 13,
   },
 });

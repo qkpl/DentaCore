@@ -1,18 +1,21 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import { useAuth } from "../../context/AuthContext";
 import { Clinic } from "../../data/mockData";
 import { getAllClinics } from "../../services/dataService";
+import { getGeminiResponse } from "../../services/geminiService";
 
 interface ClinicRecommendation {
   clinic: Clinic;
@@ -34,6 +37,8 @@ interface AIAssistantScreenProps {
 export default function AIAssistantScreen({
   navigation,
 }: AIAssistantScreenProps) {
+  const { user } = useAuth();
+  const clinicGeocodeCache = useRef<Record<string, { lat: number; lng: number }>>({});
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "1",
@@ -54,6 +59,28 @@ export default function AIAssistantScreen({
 
   const toRadians = (value: number): number => (value * Math.PI) / 180;
 
+  const hasStructuredAddressFormat = (address: string): boolean => {
+    const segments = address
+      .split(",")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+
+    if (segments.length < 4) {
+      return false;
+    }
+
+    const postalCode = segments[segments.length - 1];
+    return /^\d{4}$/.test(postalCode);
+  };
+
+  const normalizeAddressForGeocoding = (address: string): string => {
+    if (/philippines/i.test(address)) {
+      return address;
+    }
+
+    return `${address}, Philippines`;
+  };
+
   const calculateDistanceKm = (
     fromLat: number,
     fromLng: number,
@@ -73,43 +100,162 @@ export default function AIAssistantScreen({
     return earthRadiusKm * c;
   };
 
-  const getNearestClinicRecommendations = async (): Promise<
-    ClinicRecommendation[]
-  > => {
+  const getNearestClinicRecommendations = async (): Promise<{
+    recommendations: ClinicRecommendation[];
+    reason?: "missing_address" | "invalid_format" | "address_not_found";
+    addressUsed?: string;
+  }> => {
+    const registeredAddress = user?.address?.trim();
+    if (!registeredAddress) {
+      return { recommendations: [], reason: "missing_address" };
+    }
+
+    if (!hasStructuredAddressFormat(registeredAddress)) {
+      return {
+        recommendations: [],
+        reason: "invalid_format",
+        addressUsed: registeredAddress,
+      };
+    }
+
     const clinicsWithCoordinates = getAllClinics().filter(
-      (clinic) =>
-        Number.isFinite(clinic.location?.lat) &&
-        Number.isFinite(clinic.location?.lng),
+      (clinic) => Boolean(clinic.address?.trim()),
     );
 
     if (!clinicsWithCoordinates.length) {
-      return [];
+      return { recommendations: [] };
     }
 
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        return [];
+      const geocoded = await Location.geocodeAsync(
+        normalizeAddressForGeocoding(registeredAddress),
+      );
+      const locationPoint = geocoded[0];
+      if (!locationPoint) {
+        return {
+          recommendations: [],
+          reason: "address_not_found",
+          addressUsed: registeredAddress,
+        };
       }
 
-      const current = await Location.getCurrentPositionAsync({});
-      const currentLat = current.coords.latitude;
-      const currentLng = current.coords.longitude;
+      const baseLat = locationPoint.latitude;
+      const baseLng = locationPoint.longitude;
 
-      return clinicsWithCoordinates
-        .map((clinic) => ({
-          clinic,
-          distanceKm: calculateDistanceKm(
-            currentLat,
-            currentLng,
-            clinic.location.lat,
-            clinic.location.lng,
-          ),
-        }))
-        .sort((a, b) => a.distanceKm - b.distanceKm)
-        .slice(0, 3);
+      const COORDINATE_MISMATCH_KM = 50;
+
+      const clinicPoints = await Promise.all(
+        clinicsWithCoordinates.map(async (clinic) => {
+          const hasValidStoredCoordinates =
+            Number.isFinite(clinic.location?.lat) &&
+            Number.isFinite(clinic.location?.lng) &&
+            Math.abs(clinic.location.lat) > 0.0001 &&
+            Math.abs(clinic.location.lng) > 0.0001;
+
+          const storedPoint = hasValidStoredCoordinates
+            ? {
+                lat: clinic.location.lat,
+                lng: clinic.location.lng,
+              }
+            : null;
+
+          const cached = clinicGeocodeCache.current[clinic.id];
+
+          let geocodedPoint: { lat: number; lng: number } | null =
+            cached ?? null;
+
+          if (!geocodedPoint) {
+            try {
+              const clinicGeocoded = await Location.geocodeAsync(
+                normalizeAddressForGeocoding(clinic.address),
+              );
+              const point = clinicGeocoded[0];
+              if (point) {
+                geocodedPoint = {
+                  lat: point.latitude,
+                  lng: point.longitude,
+                };
+                clinicGeocodeCache.current[clinic.id] = geocodedPoint;
+              }
+            } catch (error) {
+              geocodedPoint = null;
+            }
+          }
+
+          if (storedPoint && geocodedPoint) {
+            const mismatchKm = calculateDistanceKm(
+              storedPoint.lat,
+              storedPoint.lng,
+              geocodedPoint.lat,
+              geocodedPoint.lng,
+            );
+
+            if (mismatchKm > COORDINATE_MISMATCH_KM) {
+              return {
+                clinic,
+                lat: geocodedPoint.lat,
+                lng: geocodedPoint.lng,
+              };
+            }
+
+            return {
+              clinic,
+              lat: storedPoint.lat,
+              lng: storedPoint.lng,
+            };
+          }
+
+          if (geocodedPoint) {
+            return {
+              clinic,
+              lat: geocodedPoint.lat,
+              lng: geocodedPoint.lng,
+            };
+          }
+
+          if (storedPoint) {
+            return {
+              clinic,
+              lat: storedPoint.lat,
+              lng: storedPoint.lng,
+            };
+          }
+
+          return null;
+        }),
+      );
+
+      const candidates = clinicPoints.filter(
+        (
+          item,
+        ): item is {
+          clinic: Clinic;
+          lat: number;
+          lng: number;
+        } => item !== null,
+      );
+
+      return {
+        recommendations: candidates
+          .map((item) => ({
+            clinic: item.clinic,
+            distanceKm: calculateDistanceKm(
+              baseLat,
+              baseLng,
+              item.lat,
+              item.lng,
+            ),
+          }))
+          .sort((a, b) => a.distanceKm - b.distanceKm)
+          .slice(0, 3),
+        addressUsed: registeredAddress,
+      };
     } catch (error) {
-      return [];
+      return {
+        recommendations: [],
+        reason: "address_not_found",
+        addressUsed: registeredAddress,
+      };
     }
   };
 
@@ -154,56 +300,46 @@ export default function AIAssistantScreen({
   const getAIResponse = async (
     question: string,
   ): Promise<{ text: string; recommendedClinics?: ClinicRecommendation[] }> => {
-    const lowerQuestion = question.toLowerCase();
+    // Get response from Gemini API
+    const geminiResponse = await getGeminiResponse(question);
 
-    if (lowerQuestion.includes("care") || lowerQuestion.includes("teeth")) {
-      return {
-        text: "Here are some important tips for dental care:\n\n1. Brush twice daily with fluoride toothpaste\n2. Floss daily to remove plaque between teeth\n3. Visit your dentist every 6 months\n4. Limit sugary foods and drinks\n5. Use mouthwash for extra protection\n\nWould you like more specific information?",
-      };
-    }
-
-    if (lowerQuestion.includes("root canal")) {
-      return {
-        text: "A root canal is a treatment to repair and save a badly damaged or infected tooth. The procedure involves:\n\n• Removing the infected pulp\n• Cleaning the root canal\n• Filling and sealing the tooth\n\nIt's typically done under local anesthesia and most patients report minimal discomfort. Would you like to book a consultation?",
-      };
-    }
-
-    if (lowerQuestion.includes("whitening")) {
-      return {
-        text: "Teeth whitening tips:\n\n1. Professional whitening is most effective\n2. Avoid staining foods (coffee, red wine)\n3. Use whitening toothpaste regularly\n4. Consider at-home whitening kits\n5. Maintain good oral hygiene\n\nI can help you find clinics that offer professional whitening services!",
-      };
-    }
-
-    if (lowerQuestion.includes("extraction")) {
-      return {
-        text: "Post-extraction care guide:\n\n1. Bite on gauze for 30-45 minutes\n2. Avoid rinsing for 24 hours\n3. Apply ice pack to reduce swelling\n4. Take prescribed pain medication\n5. Eat soft foods for a few days\n6. Avoid smoking and straws\n\nContact your dentist if bleeding persists or you have severe pain.",
-      };
-    }
-
-    if (
-      lowerQuestion.includes("nearest") ||
-      lowerQuestion.includes("near me") ||
-      lowerQuestion.includes("nearby") ||
-      lowerQuestion.includes("find clinic") ||
-      lowerQuestion.includes("clinic")
-    ) {
-      const recommendations = await getNearestClinicRecommendations();
+    // Check if user is asking for nearest clinics
+    if (geminiResponse.shouldShowClinics) {
+      const { recommendations, reason, addressUsed } =
+        await getNearestClinicRecommendations();
 
       if (!recommendations.length) {
+        if (reason === "missing_address") {
+          return {
+            text: "I can find the nearest clinics based on your registered address, but your profile address is empty. Please update your address in Profile first, then ask me again.",
+          };
+        }
+
+        if (reason === "invalid_format") {
+          return {
+            text: "Please update your address in Profile using this format: House/Street, Barangay, City/Municipality, Province (optional), 4-digit Postal Code.",
+          };
+        }
+
+        if (reason === "address_not_found") {
+          return {
+            text: `I couldn't locate your registered address${addressUsed ? ` (${addressUsed})` : ""}. Please update it in Profile with a more specific format (street, city, province), then ask me again.`,
+          };
+        }
+
         return {
-          text: "I can recommend the nearest clinic, but I need your location permission first. Please allow location access, then ask me again to find the nearest clinics.",
+          text: "I couldn't fetch nearby clinics right now. Please try again in a moment.",
         };
       }
 
-      const topClinic = recommendations[0];
       return {
-        text: `I found the nearest clinics based on your current location. The closest one is ${topClinic.clinic.name} (${topClinic.distanceKm.toFixed(1)} km away).\n\nTap any clinic card below to open full clinic details.`,
+        text: `${geminiResponse.text}\n\nBased on your registered address${addressUsed ? `: ${addressUsed}` : ""}.`,
         recommendedClinics: recommendations,
       };
     }
 
     return {
-      text: "Thank you for your question! While I can provide general information, I recommend consulting with a dental professional for personalized advice. Would you like me to help you find a clinic or book an appointment?",
+      text: geminiResponse.text,
     };
   };
 
@@ -278,6 +414,31 @@ export default function AIAssistantScreen({
                     <Text style={styles.recommendationAddress}>
                       {recommendation.clinic.address || "No address provided"}
                     </Text>
+                    {Platform.OS !== "web" &&
+                      Number.isFinite(recommendation.clinic.location?.lat) &&
+                      Number.isFinite(recommendation.clinic.location?.lng) && (
+                        <MapView
+                          style={styles.recommendationMiniMap}
+                          provider={PROVIDER_GOOGLE as any}
+                          region={{
+                            latitude: recommendation.clinic.location.lat,
+                            longitude: recommendation.clinic.location.lng,
+                            latitudeDelta: 0.01,
+                            longitudeDelta: 0.01,
+                          }}
+                          scrollEnabled={false}
+                          zoomEnabled={false}
+                          rotateEnabled={false}
+                          pitchEnabled={false}
+                        >
+                          <Marker
+                            coordinate={{
+                              latitude: recommendation.clinic.location.lat,
+                              longitude: recommendation.clinic.location.lng,
+                            }}
+                          />
+                        </MapView>
+                      )}
                     <View style={styles.recommendationFooter}>
                       <Text style={styles.recommendationDistance}>
                         {recommendation.distanceKm.toFixed(1)} km away
@@ -478,6 +639,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: "#4B5563",
     marginBottom: 6,
+  },
+  recommendationMiniMap: {
+    height: 90,
+    borderRadius: 8,
+    marginBottom: 8,
   },
   recommendationFooter: {
     flexDirection: "row",

@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useMemo, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -18,7 +19,11 @@ import {
     getPatientAvatarUri,
     subscribeToPatientAvatar,
 } from "../../services/avatarService";
-import { filterClinics, searchClinics } from "../../services/dataService";
+import {
+    filterClinics,
+    getUpcomingAppointmentsForPatient,
+    searchClinics,
+} from "../../services/dataService";
 
 interface PatientHomeScreenProps {
   navigation: any;
@@ -34,7 +39,9 @@ export default function PatientHomeScreen({
   const [allClinics, setAllClinics] = useState<Clinic[]>([]);
   const [showFilters, setShowFilters] = useState(false);
   const [refreshingClinics, setRefreshingClinics] = useState(false);
+  const [clinicsSyncTick, setClinicsSyncTick] = useState(0);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
+  const [upcomingNotifications, setUpcomingNotifications] = useState<any[]>([]);
 
   // Filter states
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
@@ -52,7 +59,39 @@ export default function PatientHomeScreen({
 
   useEffect(() => {
     applyFilters();
-  }, [searchQuery, selectedServices, minRating, sortBy]);
+  }, [searchQuery, selectedServices, minRating, sortBy, clinicsSyncTick]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const syncClinics = async () => {
+      try {
+        await refreshClinics();
+        if (isMounted) {
+          setClinicsSyncTick((value) => value + 1);
+        }
+      } catch (error) {
+        // Keep current list when refresh is unavailable.
+      }
+    };
+
+    void syncClinics();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [refreshClinics, user?.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) {
+        setUpcomingNotifications([]);
+        return;
+      }
+
+      setUpcomingNotifications(getUpcomingAppointmentsForPatient(user.id, 3));
+    }, [user]),
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -150,6 +189,22 @@ export default function PatientHomeScreen({
     navigation.navigate("ClinicDetails", { clinic });
   };
 
+  const handleOpenReminders = () => {
+    if (upcomingNotifications.length === 0) {
+      Alert.alert("Reminders", "You have no upcoming appointments.");
+      return;
+    }
+
+    const message = upcomingNotifications
+      .map(
+        (appointment) =>
+          `${appointment.date} ${appointment.time} · ${appointment.clinicName}`,
+      )
+      .join("\n");
+
+    Alert.alert("Upcoming Appointments", message);
+  };
+
   const handleRefreshClinics = async () => {
     if (refreshingClinics) {
       return;
@@ -158,7 +213,7 @@ export default function PatientHomeScreen({
     setRefreshingClinics(true);
     try {
       await refreshClinics();
-      applyFilters();
+      setClinicsSyncTick((value) => value + 1);
     } catch (error) {
       Alert.alert("Refresh Failed", "Unable to refresh clinic list right now.");
     } finally {
@@ -274,15 +329,47 @@ export default function PatientHomeScreen({
 
           <TouchableOpacity
             style={styles.actionCard}
-            onPress={() =>
-              Alert.alert("Reminders", "You have no upcoming reminders")
-            }
+            onPress={handleOpenReminders}
           >
             <View style={[styles.actionIcon, { backgroundColor: "#FCE4EC" }]}>
               <Ionicons name="notifications" size={24} color="#C2185B" />
             </View>
             <Text style={styles.actionText}>Reminders</Text>
+            {upcomingNotifications.length > 0 && (
+              <View style={styles.actionBadge}>
+                <Text style={styles.actionBadgeText}>
+                  {upcomingNotifications.length}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Notifications</Text>
+          {upcomingNotifications.length === 0 ? (
+            <View style={styles.notificationCard}>
+              <Text style={styles.notificationEmptyText}>
+                No upcoming appointments yet.
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.notificationCard}>
+              {upcomingNotifications.map((appointment) => (
+                <View key={appointment.id} style={styles.notificationRow}>
+                  <Ionicons name="notifications-outline" size={18} color="#C2185B" />
+                  <View style={styles.notificationCopyWrap}>
+                    <Text style={styles.notificationTitle}>
+                      Upcoming appointment at {appointment.clinicName}
+                    </Text>
+                    <Text style={styles.notificationMeta}>
+                      {appointment.date} · {appointment.time}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
         {/* Clinics List */}
@@ -677,6 +764,24 @@ const styles = StyleSheet.create({
     width: "23%",
     alignItems: "center",
     marginBottom: 15,
+    position: "relative",
+  },
+  actionBadge: {
+    position: "absolute",
+    top: -2,
+    right: 8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#F44336",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 4,
+  },
+  actionBadgeText: {
+    color: "#FFF",
+    fontSize: 10,
+    fontWeight: "700",
   },
   actionIcon: {
     width: 60,
@@ -724,6 +829,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#666",
     marginBottom: 15,
+  },
+  notificationCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#F0E4EC",
+    marginBottom: 6,
+    gap: 10,
+  },
+  notificationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  notificationCopyWrap: {
+    flex: 1,
+  },
+  notificationTitle: {
+    fontSize: 13,
+    color: "#374151",
+    fontWeight: "700",
+  },
+  notificationMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  notificationEmptyText: {
+    fontSize: 13,
+    color: "#666",
   },
   clinicCard: {
     flexDirection: "row",

@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import React, { useCallback, useState } from "react";
+import { useCallback, useState } from "react";
 import {
     ActivityIndicator,
     ScrollView,
@@ -10,7 +10,11 @@ import {
     View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
-import { getClinicStats } from "../../services/dataService";
+import {
+    getClinicStats,
+    getClinicTransactionAuditLogs,
+    getUpcomingAppointmentsForClinic,
+} from "../../services/dataService";
 
 interface ClinicDashboardScreenProps {
   navigation: any;
@@ -77,6 +81,12 @@ export default function ClinicDashboardScreen({
     );
   }
 
+  const transactionAuditLogs = getClinicTransactionAuditLogs(clinic.id, 8);
+  const upcomingPatientAppointments = getUpcomingAppointmentsForClinic(
+    clinic.id,
+    5,
+  );
+
   return (
     <ScrollView style={styles.container}>
       {/* Header */}
@@ -116,7 +126,7 @@ export default function ClinicDashboardScreen({
             <View style={styles.overviewItem}>
               <Text style={styles.overviewLabel}>Revenue</Text>
               <Text style={styles.overviewValue}>
-                ${stats.revenue.toLocaleString()}
+                ₱{stats.revenue.toLocaleString()}
               </Text>
               <Text style={styles.overviewGrowth}>↑ 12.8%</Text>
             </View>
@@ -232,6 +242,52 @@ export default function ClinicDashboardScreen({
               Your rating: {clinic.rating} ⭐
             </Text>
           </View>
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Notifications</Text>
+        <View style={styles.notificationCard}>
+          {upcomingPatientAppointments.length === 0 ? (
+            <Text style={styles.notificationEmptyText}>
+              No upcoming patient appointments.
+            </Text>
+          ) : (
+            upcomingPatientAppointments.map((appointment) => (
+              <View key={appointment.id} style={styles.notificationRow}>
+                <Ionicons name="notifications-outline" size={18} color="#C2185B" />
+                <View style={styles.notificationCopyWrap}>
+                  <Text style={styles.notificationTitle}>
+                    {appointment.patientName} has an upcoming appointment
+                  </Text>
+                  <Text style={styles.notificationMeta}>
+                    {appointment.date} · {appointment.time}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      </View>
+
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Transaction Audit Logs</Text>
+        <View style={styles.auditCard}>
+          {transactionAuditLogs.length === 0 ? (
+            <Text style={styles.auditEmptyText}>No payment audit events yet.</Text>
+          ) : (
+            transactionAuditLogs.map((log) => (
+              <View key={log.id} style={styles.auditRow}>
+                <Ionicons name="receipt-outline" size={18} color="#0EA5E9" />
+                <View style={styles.auditCopyWrap}>
+                  <Text style={styles.auditText}>{log.details}</Text>
+                  <Text style={styles.auditMeta}>
+                    {new Date(log.createdAt).toLocaleString()} · {log.transactionId || "N/A"}
+                  </Text>
+                </View>
+              </View>
+            ))
+          )}
         </View>
       </View>
     </ScrollView>
@@ -455,5 +511,65 @@ const styles = StyleSheet.create({
     color: "#666",
     marginLeft: 12,
     flex: 1,
+  },
+  auditCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#ECEFF1",
+    gap: 12,
+  },
+  notificationCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#F0E4EC",
+    gap: 10,
+  },
+  notificationRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  notificationCopyWrap: {
+    flex: 1,
+  },
+  notificationTitle: {
+    fontSize: 13,
+    color: "#374151",
+    fontWeight: "700",
+  },
+  notificationMeta: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  notificationEmptyText: {
+    fontSize: 13,
+    color: "#666",
+  },
+  auditRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+  },
+  auditCopyWrap: {
+    flex: 1,
+  },
+  auditText: {
+    fontSize: 13,
+    color: "#334155",
+    fontWeight: "600",
+  },
+  auditMeta: {
+    marginTop: 2,
+    fontSize: 11,
+    color: "#64748B",
+  },
+  auditEmptyText: {
+    fontSize: 13,
+    color: "#666",
   },
 });

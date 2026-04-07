@@ -21,6 +21,7 @@ export interface Clinic {
   email: string;
   description: string;
   servicesOffered: string[];
+  servicePrices?: Record<string, number>;
   operatingHours: {
     monday: string;
     tuesday: string;
@@ -99,11 +100,41 @@ export interface StaffMember {
   status: "active" | "inactive";
 }
 
+export type AuditScope = "clinic" | "admin";
+
+export interface AuditLog {
+  id: string;
+  scope: AuditScope;
+  eventType:
+    | "payment_received"
+    | "payment_failed"
+    | "appointment_created"
+    | "appointment_status_updated"
+    | "appointment_cancelled"
+    | "appointment_rescheduled"
+    | "clinic_updated"
+    | "clinic_deleted"
+    | "user_updated"
+    | "user_deleted";
+  createdAt: string;
+  actorRole: User["role"] | "system";
+  actorId?: string;
+  actorName?: string;
+  clinicId?: string;
+  patientId?: string;
+  appointmentId?: string;
+  transactionId?: string;
+  paymentMethod?: PaymentMethod;
+  amount?: number;
+  status?: Appointment["status"] | PaymentStatus;
+  details: string;
+}
+
 // Mock Users
 export const mockUsers: User[] = [
   {
     id: "patient1",
-    name: "Demo User",
+    name: "Patient One",
     email: "user@email.com",
     phone: "+1 (555) 123-4567",
     role: "patient",
@@ -282,6 +313,8 @@ export const mockClinicReviews: ClinicReview[] = [
     createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7).toISOString(),
   },
 ];
+
+export const mockAuditLogs: AuditLog[] = [];
 
 // Mock Appointments
 export const mockAppointments: Appointment[] = [

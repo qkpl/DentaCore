@@ -3,17 +3,21 @@ import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
 import { useEffect, useMemo, useState } from "react";
 import {
-  Alert,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Alert,
+    Modal,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { Clinic, PaymentMethod } from "../../data/mockData";
-import { createAppointment, getServicePrice } from "../../services/dataService";
+import {
+    createAppointment,
+    getBlockingAppointmentForPatient,
+    getServicePrice,
+} from "../../services/dataService";
 import { createPayPalOrder } from "../../services/paypalService";
 
 WebBrowser.maybeCompleteAuthSession();
@@ -207,8 +211,14 @@ export default function BookAppointmentScreen({
     if (!selectedService) {
       return null;
     }
+
+    const clinicPrice = clinic.servicePrices?.[selectedService];
+    if (typeof clinicPrice === "number" && Number.isFinite(clinicPrice)) {
+      return clinicPrice;
+    }
+
     return getServicePrice(selectedService);
-  }, [selectedService]);
+  }, [clinic.servicePrices, selectedService]);
 
   const formattedSelectedServicePrice = useMemo(() => {
     if (selectedServicePrice === null) {
@@ -281,6 +291,21 @@ export default function BookAppointmentScreen({
       return;
     }
 
+    const selectedDateValue = selectedDate;
+    const selectedTimeValue = selectedTimeSlot.label;
+    const existingAppointment = getBlockingAppointmentForPatient(
+      user.id,
+      selectedDateValue,
+      selectedTimeValue,
+    );
+    if (existingAppointment) {
+      Alert.alert(
+        "Slot Already Taken",
+        `You already have an appointment on ${existingAppointment.date} at ${existingAppointment.time}. Please choose another date or time.`,
+      );
+      return;
+    }
+
     const paymentLabel = selectedPaymentOption?.label || "your selected method";
     const paymentAmount =
       selectedServicePrice ?? getServicePrice(selectedService);
@@ -293,8 +318,8 @@ export default function BookAppointmentScreen({
         clinicId: clinic.id,
         clinicName: clinic.name,
         dentistName: "Assigned Dentist",
-        date: selectedDate,
-        time: selectedTimeSlot.label,
+        date: selectedDateValue,
+        time: selectedTimeValue,
         type: selectedService,
         status: "pending" as const,
         paymentMethod: selectedPaymentMethod,
@@ -454,7 +479,11 @@ export default function BookAppointmentScreen({
           </Text>
           <View style={styles.servicesGrid}>
             {clinic.servicesOffered.map((service, index) => {
-              const price = getServicePrice(service);
+              const price =
+                typeof clinic.servicePrices?.[service] === "number" &&
+                Number.isFinite(clinic.servicePrices?.[service])
+                  ? clinic.servicePrices![service]
+                  : getServicePrice(service);
               const formattedPrice = formatCurrency(price);
               const isSelected = selectedService === service;
 

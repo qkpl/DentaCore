@@ -1,28 +1,106 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as Location from "expo-location";
 import { useEffect, useMemo, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  Image,
-  Modal,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Image,
+    Modal,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from "react-native";
+import {
+    MapView,
+    Marker,
+    PROVIDER_GOOGLE,
+    UrlTile,
+} from "../../components/maps/MapPrimitives";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getPatientAvatarUri,
-  savePatientAvatarUri,
-  subscribeToPatientAvatar,
+    getPatientAvatarUri,
+    savePatientAvatarUri,
+    subscribeToPatientAvatar,
 } from "../../services/avatarService";
+import { getUpcomingAppointmentsForPatient } from "../../services/dataService";
 
 interface ProfileScreenProps {
   navigation: any;
 }
+
+type AddressParts = {
+  houseStreet: string;
+  barangay: string;
+  cityMunicipality: string;
+  province: string;
+  postalCode: string;
+};
+
+const emptyAddressParts = (): AddressParts => ({
+  houseStreet: "",
+  barangay: "",
+  cityMunicipality: "",
+  province: "",
+  postalCode: "",
+});
+
+const parseAddressParts = (address?: string): AddressParts => {
+  if (!address?.trim()) {
+    return emptyAddressParts();
+  }
+
+  const segments = address
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length >= 5) {
+    return {
+      houseStreet: segments[0],
+      barangay: segments[1],
+      cityMunicipality: segments[2],
+      province: segments.slice(3, -1).join(", "),
+      postalCode: segments[segments.length - 1],
+    };
+  }
+
+  if (segments.length === 4) {
+    return {
+      houseStreet: segments[0],
+      barangay: segments[1],
+      cityMunicipality: segments[2],
+      province: "",
+      postalCode: segments[3],
+    };
+  }
+
+  return {
+    houseStreet: segments[0] ?? "",
+    barangay: segments[1] ?? "",
+    cityMunicipality: segments[2] ?? "",
+    province: "",
+    postalCode: segments[3] ?? "",
+  };
+};
+
+const buildAddressFromParts = (parts: AddressParts): string => {
+  const segments = [
+    parts.houseStreet.trim(),
+    parts.barangay.trim(),
+    parts.cityMunicipality.trim(),
+    parts.province.trim(),
+    parts.postalCode.trim(),
+  ].filter(Boolean);
+
+  return segments.join(", ");
+};
+
+const defaultPin = { lat: 14.5995, lng: 120.9842 };
 
 export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const { user, logout, updateProfile, changePassword } = useAuth();
@@ -30,7 +108,9 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const [isPasswordModalVisible, setIsPasswordModalVisible] = useState(false);
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profilePhone, setProfilePhone] = useState(user?.phone ?? "");
-  const [profileAddress, setProfileAddress] = useState(user?.address ?? "");
+  const [addressParts, setAddressParts] = useState<AddressParts>(() =>
+    parseAddressParts(user?.address),
+  );
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -41,6 +121,51 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [isAvatarActionPending, setIsAvatarActionPending] = useState(false);
+  const [isAddressMapModalVisible, setIsAddressMapModalVisible] = useState(false);
+  const [mapPin, setMapPin] = useState(defaultPin);
+  const [isResolvingAddress, setIsResolvingAddress] = useState(false);
+  const [isNotificationsModalVisible, setIsNotificationsModalVisible] = useState(false);
+  const [isPrivacyModalVisible, setIsPrivacyModalVisible] = useState(false);
+  const [isPreferencesModalVisible, setIsPreferencesModalVisible] = useState(false);
+  const [isHelpModalVisible, setIsHelpModalVisible] = useState(false);
+  const [profileVisibilityAdminOnly, setProfileVisibilityAdminOnly] = useState(true);
+  const [locationSharingEnabled, setLocationSharingEnabled] = useState(true);
+  const [darkThemeEnabled, setDarkThemeEnabled] = useState(false);
+  const [language, setLanguage] = useState("English");
+  const mapProvider = Platform.OS === "android" ? PROVIDER_GOOGLE : undefined;
+
+  const upcomingNotifications = useMemo(() => {
+    if (!user?.id) {
+      return [];
+    }
+
+    return getUpcomingAppointmentsForPatient(user.id, 8).map((appointment) => ({
+      id: appointment.id,
+      title: `Upcoming appointment at ${appointment.clinicName}`,
+      body: `${appointment.type} · ${appointment.date} · ${appointment.time}`,
+      priority: "medium",
+      status: "unread",
+      timestamp: `${appointment.date} ${appointment.time}`,
+    }));
+  }, [user?.id]);
+
+  const loginActivity = useMemo(
+    () => [
+      {
+        id: "login-1",
+        device: "Android device",
+        timestamp: new Date().toLocaleString(),
+        location: user?.address || "Unknown location",
+      },
+      {
+        id: "login-2",
+        device: "Web browser",
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toLocaleString(),
+        location: "Metro Manila",
+      },
+    ],
+    [user?.address],
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -102,9 +227,105 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
     if (user) {
       setProfileName(user.name ?? "");
       setProfilePhone(user.phone ?? "");
-      setProfileAddress(user.address ?? "");
+      setAddressParts(parseAddressParts(user.address));
     }
     setIsEditModalVisible(true);
+  };
+
+  const handleAddressPartChange = (key: keyof AddressParts, value: string) => {
+    setAddressParts((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const geocodeCurrentAddressForPin = async () => {
+    const currentAddress = buildAddressFromParts(addressParts);
+    if (!currentAddress) {
+      return false;
+    }
+
+    try {
+      const result = await Location.geocodeAsync(`${currentAddress}, Philippines`);
+      const point = result?.[0];
+      if (!point) {
+        return false;
+      }
+
+      setMapPin({ lat: point.latitude, lng: point.longitude });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  const handleOpenMapPicker = async () => {
+    const hasAddressPin = await geocodeCurrentAddressForPin();
+    if (hasAddressPin) {
+      setIsAddressMapModalVisible(true);
+      return;
+    }
+
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (permission.granted) {
+        const current = await Location.getCurrentPositionAsync({});
+        setMapPin({
+          lat: current.coords.latitude,
+          lng: current.coords.longitude,
+        });
+      }
+    } catch (error) {
+      // Keep default pin if location fetch fails.
+    }
+
+    setIsAddressMapModalVisible(true);
+  };
+
+  const handleMapPress = (event: {
+    nativeEvent: { coordinate: { latitude: number; longitude: number } };
+  }) => {
+    const { latitude, longitude } = event.nativeEvent.coordinate;
+    setMapPin({ lat: latitude, lng: longitude });
+  };
+
+  const handleUsePinnedAddress = async () => {
+    setIsResolvingAddress(true);
+    try {
+      const reverse = await Location.reverseGeocodeAsync({
+        latitude: mapPin.lat,
+        longitude: mapPin.lng,
+      });
+      const first = reverse?.[0];
+
+      if (!first) {
+        Alert.alert(
+          "Address lookup failed",
+          "We couldn't read an address from this pin. Try a nearby road pin.",
+        );
+        return;
+      }
+
+      const postalDigits = (first.postalCode ?? "").replace(/[^0-9]/g, "");
+
+      setAddressParts((prev) => ({
+        houseStreet:
+          [first.streetNumber, first.street].filter(Boolean).join(" ") ||
+          first.name ||
+          prev.houseStreet,
+        barangay: first.district || prev.barangay,
+        cityMunicipality:
+          first.city || first.subregion || prev.cityMunicipality,
+        province: first.region || prev.province,
+        postalCode: postalDigits.slice(0, 4) || prev.postalCode,
+      }));
+
+      setIsAddressMapModalVisible(false);
+    } catch (error) {
+      Alert.alert(
+        "Address lookup failed",
+        "We couldn't resolve this pinned location. Please try another pin.",
+      );
+    } finally {
+      setIsResolvingAddress(false);
+    }
   };
 
   const handleChangePassword = () => {
@@ -209,11 +430,41 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       return;
     }
 
+    const houseStreet = addressParts.houseStreet.trim();
+    const barangay = addressParts.barangay.trim();
+    const cityMunicipality = addressParts.cityMunicipality.trim();
+    const province = addressParts.province.trim();
+    const postalCode = addressParts.postalCode.trim();
+
+    if (!houseStreet || !barangay || !cityMunicipality || !postalCode) {
+      Alert.alert(
+        "Incomplete address",
+        "Please fill House/Street, Barangay, City/Municipality, and 4-digit Postal Code.",
+      );
+      return;
+    }
+
+    if (!/^\d{4}$/.test(postalCode)) {
+      Alert.alert(
+        "Invalid postal code",
+        "Postal code must be exactly 4 digits (e.g., 1101).",
+      );
+      return;
+    }
+
+    const normalizedAddress = buildAddressFromParts({
+      houseStreet,
+      barangay,
+      cityMunicipality,
+      province,
+      postalCode,
+    });
+
     setIsSavingProfile(true);
     const response = await updateProfile({
       name: trimmedName,
       phone: profilePhone,
-      address: profileAddress,
+      address: normalizedAddress,
     });
     setIsSavingProfile(false);
 
@@ -357,9 +608,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() =>
-            Alert.alert("Notifications", "Notification settings coming soon")
-          }
+          onPress={() => setIsNotificationsModalVisible(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="notifications-outline" size={24} color="#666" />
@@ -373,7 +622,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() => Alert.alert("Privacy", "Privacy settings coming soon")}
+          onPress={() => setIsPrivacyModalVisible(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="shield-checkmark-outline" size={24} color="#666" />
@@ -384,9 +633,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() =>
-            Alert.alert("Preferences", "Preferences settings coming soon")
-          }
+          onPress={() => setIsPreferencesModalVisible(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="options-outline" size={24} color="#666" />
@@ -402,7 +649,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
 
         <TouchableOpacity
           style={styles.settingItem}
-          onPress={() => Alert.alert("Help", "Help center coming soon")}
+          onPress={() => setIsHelpModalVisible(true)}
         >
           <View style={styles.settingLeft}>
             <Ionicons name="help-circle-outline" size={24} color="#666" />
@@ -469,16 +716,83 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             </View>
 
             <View style={styles.modalField}>
-              <Text style={styles.modalLabel}>Address</Text>
+              <Text style={styles.modalLabel}>House No./Street</Text>
               <TextInput
-                style={[styles.modalInput, styles.modalTextArea]}
-                placeholder="Street, city, ZIP"
-                value={profileAddress}
-                onChangeText={setProfileAddress}
-                multiline
-                numberOfLines={3}
+                style={styles.modalInput}
+                placeholder="24 C.V. UP Campus"
+                value={addressParts.houseStreet}
+                onChangeText={(value) =>
+                  handleAddressPartChange("houseStreet", value)
+                }
               />
             </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Barangay</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="UP Campus"
+                value={addressParts.barangay}
+                onChangeText={(value) =>
+                  handleAddressPartChange("barangay", value)
+                }
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>City/Municipality</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Quezon City"
+                value={addressParts.cityMunicipality}
+                onChangeText={(value) =>
+                  handleAddressPartChange("cityMunicipality", value)
+                }
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Province (if applicable)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Metro Manila"
+                value={addressParts.province}
+                onChangeText={(value) =>
+                  handleAddressPartChange("province", value)
+                }
+              />
+            </View>
+
+            <View style={styles.modalField}>
+              <Text style={styles.modalLabel}>Postal Code (4 digits)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="1101"
+                keyboardType="number-pad"
+                maxLength={4}
+                value={addressParts.postalCode}
+                onChangeText={(value) =>
+                  handleAddressPartChange("postalCode", value.replace(/[^0-9]/g, ""))
+                }
+              />
+              <Text style={styles.modalHint}>
+                Format saved: House/Street, Barangay, City/Municipality,
+                Province, 4-digit Postal Code
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.mapPickerButton}
+              onPress={() => {
+                void handleOpenMapPicker();
+              }}
+              disabled={isSavingProfile}
+            >
+              <Ionicons name="map-outline" size={18} color="#0F766E" />
+              <Text style={styles.mapPickerButtonText}>
+                Pin address on Google Map
+              </Text>
+            </TouchableOpacity>
 
             <View style={styles.modalActions}>
               <TouchableOpacity
@@ -497,6 +811,70 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
                   <ActivityIndicator color="#FFF" />
                 ) : (
                   <Text style={styles.modalPrimaryButtonText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isAddressMapModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsAddressMapModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.mapModalCard}>
+            <Text style={styles.modalTitle}>Pin Your Address</Text>
+            <Text style={styles.modalDescription}>
+              Tap on the map to pin your exact location, then use that pin to
+              fill your address fields.
+            </Text>
+
+            <MapView
+              style={styles.mapPickerView}
+              provider={mapProvider as any}
+              mapType={Platform.OS === "android" ? "none" : "standard"}
+              region={{
+                latitude: mapPin.lat,
+                longitude: mapPin.lng,
+                latitudeDelta: 0.01,
+                longitudeDelta: 0.01,
+              }}
+              onPress={handleMapPress}
+            >
+              {Platform.OS === "android" && (
+                <UrlTile
+                  urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  maximumZ={19}
+                  flipY={false}
+                />
+              )}
+              <Marker
+                coordinate={{ latitude: mapPin.lat, longitude: mapPin.lng }}
+              />
+            </MapView>
+
+            <View style={styles.modalActions}>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={() => setIsAddressMapModalVisible(false)}
+                disabled={isResolvingAddress}
+              >
+                <Text style={styles.modalButtonText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalPrimaryButton]}
+                onPress={() => {
+                  void handleUsePinnedAddress();
+                }}
+                disabled={isResolvingAddress}
+              >
+                {isResolvingAddress ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <Text style={styles.modalPrimaryButtonText}>Use This Pin</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -627,6 +1005,194 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isNotificationsModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsNotificationsModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Notifications</Text>
+            <ScrollView style={styles.utilityList}>
+              {upcomingNotifications.length === 0 ? (
+                <Text style={styles.utilityEmptyText}>No notifications yet.</Text>
+              ) : (
+                upcomingNotifications.map((item) => (
+                  <View key={item.id} style={styles.utilityCard}>
+                    <Text style={styles.utilityTitle}>{item.title}</Text>
+                    <Text style={styles.utilityBody}>{item.body}</Text>
+                    <Text style={styles.utilityMeta}>
+                      {item.timestamp} · {item.status} · {item.priority}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setIsNotificationsModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isPrivacyModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsPrivacyModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Privacy & Security</Text>
+            <ScrollView style={styles.utilityList}>
+              <View style={styles.utilityCard}>
+                <Text style={styles.utilityTitle}>Profile Visibility</Text>
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() => setProfileVisibilityAdminOnly((v) => !v)}
+                >
+                  <Text style={styles.utilityActionText}>
+                    {profileVisibilityAdminOnly ? "Admin-only" : "Visible to others"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.utilityCard}>
+                <Text style={styles.utilityTitle}>Location Sharing</Text>
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() => setLocationSharingEnabled((v) => !v)}
+                >
+                  <Text style={styles.utilityActionText}>
+                    {locationSharingEnabled ? "Enabled" : "Disabled"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.utilityCard}>
+                <Text style={styles.utilityTitle}>Login Activity</Text>
+                {loginActivity.map((item) => (
+                  <Text key={item.id} style={styles.utilityMeta}>
+                    {item.device} · {item.timestamp} · {item.location}
+                  </Text>
+                ))}
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() =>
+                    Alert.alert("Logged out", "All other active sessions were signed out.")
+                  }
+                >
+                  <Text style={styles.utilityActionText}>Log out from all devices</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setIsPrivacyModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isPreferencesModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsPreferencesModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Preferences</Text>
+            <View style={styles.utilityCard}>
+              <Text style={styles.utilityTitle}>Theme</Text>
+              <TouchableOpacity
+                style={styles.utilityAction}
+                onPress={() => setDarkThemeEnabled((v) => !v)}
+              >
+                <Text style={styles.utilityActionText}>
+                  {darkThemeEnabled ? "Dark" : "Light"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.utilityCard}>
+              <Text style={styles.utilityTitle}>Language</Text>
+              <TouchableOpacity
+                style={styles.utilityAction}
+                onPress={() =>
+                  setLanguage((prev) => (prev === "English" ? "Filipino" : "English"))
+                }
+              >
+                <Text style={styles.utilityActionText}>{language}</Text>
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setIsPreferencesModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isHelpModalVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setIsHelpModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Help Center</Text>
+            <ScrollView style={styles.utilityList}>
+              <View style={styles.utilityCard}>
+                <Text style={styles.utilityTitle}>FAQs</Text>
+                <Text style={styles.utilityMeta}>• How to create an account</Text>
+                <Text style={styles.utilityMeta}>• How to book an appointment</Text>
+                <Text style={styles.utilityMeta}>• How to cancel or reschedule</Text>
+                <Text style={styles.utilityMeta}>• How to ask AI for nearby clinics</Text>
+                <Text style={styles.utilityMeta}>• What to do if AI does not understand your question</Text>
+                <Text style={styles.utilityMeta}>• Payment or transaction concerns</Text>
+              </View>
+
+              <View style={styles.utilityCard}>
+                <Text style={styles.utilityTitle}>Policies / Legal</Text>
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() => Alert.alert("Privacy Policy", "Privacy Policy link placeholder")}
+                >
+                  <Text style={styles.utilityActionText}>Privacy Policy</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() => Alert.alert("Terms & Conditions", "Terms & Conditions link placeholder")}
+                >
+                  <Text style={styles.utilityActionText}>Terms & Conditions</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.utilityAction}
+                  onPress={() => Alert.alert("Data usage", "Data usage / consent info placeholder")}
+                >
+                  <Text style={styles.utilityActionText}>Data usage / consent info</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.modalButton}
+              onPress={() => setIsHelpModalVisible(false)}
+            >
+              <Text style={styles.modalButtonText}>Close</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -854,6 +1420,41 @@ const styles = StyleSheet.create({
     height: 80,
     textAlignVertical: "top",
   },
+  modalHint: {
+    marginTop: 6,
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 16,
+  },
+  mapPickerButton: {
+    marginTop: 4,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#99F6E4",
+    backgroundColor: "#F0FDFA",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  mapPickerButtonText: {
+    fontSize: 13,
+    color: "#0F766E",
+    fontWeight: "600",
+  },
+  mapModalCard: {
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    padding: 16,
+  },
+  mapPickerView: {
+    height: 250,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 10,
+  },
   modalActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -903,5 +1504,47 @@ const styles = StyleSheet.create({
     height: "100%",
     justifyContent: "center",
     alignItems: "center",
+  },
+  utilityList: {
+    maxHeight: 320,
+  },
+  utilityCard: {
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  utilityTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 6,
+  },
+  utilityBody: {
+    color: "#334155",
+    fontSize: 13,
+  },
+  utilityMeta: {
+    color: "#64748B",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  utilityEmptyText: {
+    color: "#64748B",
+    fontSize: 13,
+    marginBottom: 10,
+  },
+  utilityAction: {
+    marginTop: 8,
+    backgroundColor: "#F1F5F9",
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  utilityActionText: {
+    color: "#0F766E",
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

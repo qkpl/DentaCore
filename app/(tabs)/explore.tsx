@@ -7,7 +7,12 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import {
+    MapView,
+    Marker,
+    PROVIDER_GOOGLE,
+    type Region,
+} from "../../components/maps/MapPrimitives";
 
 import { getAllClinics } from "../../services/dataService";
 
@@ -135,7 +140,7 @@ export default function ExploreMapScreen() {
         ) : (
           <MapView
             style={StyleSheet.absoluteFill}
-            provider={PROVIDER_GOOGLE}
+            provider={PROVIDER_GOOGLE as any}
             initialRegion={region}
             region={region}
             onRegionChangeComplete={setRegion}

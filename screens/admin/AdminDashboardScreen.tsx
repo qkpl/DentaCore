@@ -1,24 +1,26 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Dimensions,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Dimensions,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import {
-  getAdminAnalyticsReport,
-  getAllClinics,
-  getRecentTransactions,
-  refreshClinicsFromFirestore,
-  refreshUsersFromFirestore,
-  syncAppointmentsFromFirestore,
+    getAdminAnalyticsReport,
+    getAllClinics,
+    getRecentTransactions,
+    refreshClinicsFromFirestore,
+    refreshUsersFromFirestore,
+    syncAppointmentsFromFirestore,
 } from "../../services/dataService";
 
 const { width } = Dimensions.get("window");
+const AUTO_REFRESH_MS = 15000;
 
 interface AdminDashboardScreenProps {
   navigation: any;
@@ -32,6 +34,7 @@ export default function AdminDashboardScreen({
   const [clinics, setClinics] = useState(getAllClinics());
   const [transactions, setTransactions] = useState(getRecentTransactions());
   const [isSyncing, setIsSyncing] = useState(false);
+  const hydrationInProgressRef = useRef(false);
   const stats = analytics.totals;
   const revenueGrowthPercentage = (analytics.revenueGrowthRate * 100).toFixed(
     1,
@@ -42,37 +45,60 @@ export default function AdminDashboardScreen({
       (max, point) => Math.max(max, point.value),
       0,
     ) || 1;
+  const clinicDirectory = useMemo(
+    () => Object.fromEntries(clinics.map((clinic) => [clinic.id, clinic])),
+    [clinics],
+  );
+
+  const topPerformingClinics = useMemo(
+    () => analytics.revenueByClinic.slice(0, 3),
+    [analytics.revenueByClinic],
+  );
+
+  const hydrateAdminData = useCallback(async (showLoader = true) => {
+    if (hydrationInProgressRef.current) {
+      return;
+    }
+
+    hydrationInProgressRef.current = true;
+    if (showLoader) {
+      setIsSyncing(true);
+    }
+
+    try {
+      await Promise.all([
+        refreshClinicsFromFirestore(),
+        refreshUsersFromFirestore(),
+        syncAppointmentsFromFirestore(),
+      ]);
+      setClinics([...getAllClinics()]);
+      setAnalytics(getAdminAnalyticsReport());
+      setTransactions(getRecentTransactions());
+    } finally {
+      hydrationInProgressRef.current = false;
+      if (showLoader) {
+        setIsSyncing(false);
+      }
+    }
+  }, []);
 
   useEffect(() => {
-    let isMounted = true;
+    void hydrateAdminData();
+  }, [hydrateAdminData]);
 
-    const hydrateAdminData = async () => {
-      setIsSyncing(true);
-      try {
-        await Promise.all([
-          refreshClinicsFromFirestore(),
-          refreshUsersFromFirestore(),
-          syncAppointmentsFromFirestore(),
-        ]);
-        if (!isMounted) {
-          return;
-        }
-        setClinics([...getAllClinics()]);
-        setAnalytics(getAdminAnalyticsReport());
-        setTransactions(getRecentTransactions());
-      } finally {
-        if (isMounted) {
-          setIsSyncing(false);
-        }
-      }
-    };
+  useFocusEffect(
+    useCallback(() => {
+      void hydrateAdminData(true);
 
-    hydrateAdminData();
+      const intervalId = setInterval(() => {
+        void hydrateAdminData(false);
+      }, AUTO_REFRESH_MS);
 
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+      return () => {
+        clearInterval(intervalId);
+      };
+    }, [hydrateAdminData]),
+  );
 
   return (
     <ScrollView style={styles.container}>
@@ -92,6 +118,28 @@ export default function AdminDashboardScreen({
       {isSyncing && (
         <Text style={styles.syncText}>Syncing latest clinics & patients…</Text>
       )}
+      <View style={styles.refreshRow}>
+        <Text style={styles.autoRefreshText}>Auto-refresh every 15 seconds</Text>
+        <TouchableOpacity
+          style={[styles.manualRefreshButton, isSyncing && styles.manualRefreshButtonDisabled]}
+          onPress={() => void hydrateAdminData(true)}
+          disabled={isSyncing}
+        >
+          <Ionicons
+            name="refresh"
+            size={14}
+            color={isSyncing ? "#94A3B8" : "#0F766E"}
+          />
+          <Text
+            style={[
+              styles.manualRefreshText,
+              isSyncing && styles.manualRefreshTextDisabled,
+            ]}
+          >
+            Refresh now
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Stats Overview */}
       <View style={styles.statsGrid}>
@@ -118,9 +166,27 @@ export default function AdminDashboardScreen({
         <View style={[styles.statCard, { backgroundColor: "#4CAF50" }]}>
           <Ionicons name="cash" size={32} color="#FFF" />
           <Text style={styles.statValue}>
-            ₱{(stats.revenue / 1000).toFixed(1)}K
+            ₱{(stats.collectedRevenue / 1000).toFixed(1)}K
           </Text>
-          <Text style={styles.statLabel}>Total Revenue</Text>
+          <Text style={styles.statLabel}>Collected Revenue</Text>
+        </View>
+      </View>
+
+      <View style={styles.statsGrid}>
+        <View style={[styles.statCard, { backgroundColor: "#8B5CF6" }]}>
+          <Ionicons name="stats-chart" size={32} color="#FFF" />
+          <Text style={styles.statValue}>
+            ₱{(stats.projectedRevenue / 1000).toFixed(1)}K
+          </Text>
+          <Text style={styles.statLabel}>Projected Revenue</Text>
+        </View>
+
+        <View style={[styles.statCard, { backgroundColor: "#0EA5E9" }]}>
+          <Ionicons name="analytics" size={32} color="#FFF" />
+          <Text style={styles.statValue}>
+            ₱{((stats.projectedRevenue - stats.collectedRevenue) / 1000).toFixed(1)}K
+          </Text>
+          <Text style={styles.statLabel}>Forecast Remaining</Text>
         </View>
       </View>
 
@@ -130,7 +196,7 @@ export default function AdminDashboardScreen({
         <View style={styles.trendCard}>
           <View style={styles.trendHeader}>
             <Text style={styles.trendValue}>
-              ₱{stats.revenue.toLocaleString()}
+              ₱{stats.projectedRevenue.toLocaleString()}
             </Text>
             <View style={styles.trendBadge}>
               <Ionicons name="trending-up" size={16} color="#4CAF50" />
@@ -296,25 +362,27 @@ export default function AdminDashboardScreen({
           </TouchableOpacity>
         </View>
 
-        {clinics.slice(0, 3).map((clinic, index) => (
-          <View key={clinic.id} style={styles.clinicCard}>
+        {topPerformingClinics.map((entry, index) => (
+          <View key={entry.clinicId} style={styles.clinicCard}>
             <View style={styles.rankBadge}>
               <Text style={styles.rankText}>{index + 1}</Text>
             </View>
             <View style={styles.clinicInfo}>
-              <Text style={styles.clinicName}>{clinic.name}</Text>
+              <Text style={styles.clinicName}>{entry.clinicName}</Text>
               <Text style={styles.clinicRevenue}>
-                ₱{clinic.revenue.toLocaleString()} revenue
+                ₱{entry.revenue.toLocaleString()} revenue
               </Text>
             </View>
             <View style={styles.clinicStats}>
               <View style={styles.statItem}>
                 <Ionicons name="star" size={14} color="#FFB300" />
-                <Text style={styles.statText}>{clinic.rating}</Text>
+                <Text style={styles.statText}>
+                  {clinicDirectory[entry.clinicId]?.rating ?? 0}
+                </Text>
               </View>
               <View style={styles.statItem}>
                 <Ionicons name="people" size={14} color="#666" />
-                <Text style={styles.statText}>{clinic.totalPatients}</Text>
+                <Text style={styles.statText}>{entry.patientCount}</Text>
               </View>
             </View>
           </View>
@@ -353,6 +421,37 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F5F5",
+  },
+  refreshRow: {
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  autoRefreshText: {
+    color: "#64748B",
+    fontSize: 12,
+  },
+  manualRefreshButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#ECFEF8",
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  manualRefreshButtonDisabled: {
+    backgroundColor: "#F1F5F9",
+  },
+  manualRefreshText: {
+    color: "#0F766E",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  manualRefreshTextDisabled: {
+    color: "#94A3B8",
   },
   header: {
     flexDirection: "row",

@@ -12,7 +12,11 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import {
+    MapView,
+    Marker,
+    PROVIDER_GOOGLE,
+} from "../../components/maps/MapPrimitives";
 import { Clinic } from "../../data/mockData";
 import {
     deleteClinic,
@@ -162,7 +166,7 @@ export default function AdminClinicsScreen({
   const handleViewClinic = (clinic: Clinic) => {
     Alert.alert(
       clinic.name,
-      `Address: ${clinic.address}\nPhone: ${clinic.phone}\nEmail: ${clinic.email}\nRating: ${clinic.rating}\nPatients: ${clinic.totalPatients}\nRevenue: $${clinic.revenue.toLocaleString()}`,
+      `Address: ${clinic.address}\nPhone: ${clinic.phone}\nEmail: ${clinic.email}\nRating: ${clinic.rating}\nPatients: ${clinic.totalPatients}\nRevenue: ₱${clinic.revenue.toLocaleString()}`,
       [{ text: "OK" }],
     );
   };
@@ -490,7 +494,7 @@ export default function AdminClinicsScreen({
 
               <View style={styles.mapPreviewContainer}>
                 <MapView
-                  provider={PROVIDER_GOOGLE}
+                  provider={PROVIDER_GOOGLE as any}
                   style={styles.mapPreview}
                   pointerEvents="none"
                   region={mapPreviewRegion}
